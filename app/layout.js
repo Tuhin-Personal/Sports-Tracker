@@ -33,7 +33,6 @@ export default function RootLayout({ children }) {
         }}>
           <Link href="/" style={navLinkStyle}>🏠 Home</Link>
           <Link href="/teams" style={navLinkStyle}>🛡️ Teams</Link>
-          <Link href="/players" style={navLinkStyle}>🏃 Players</Link>
           <Link href="/standings" style={navLinkStyle}>🏆 Standings</Link>
           <Link href="/watchlist" style={navLinkStyle}>⭐ Watchlist</Link>
         </nav>

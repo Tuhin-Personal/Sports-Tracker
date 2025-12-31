@@ -16,7 +16,6 @@ export default function Home() {
         const data = await res.json();
         setGames(data.events || []);
         
-        // This ensures we always know what the actual "Live" week is
         if (data.week && data.week.number) {
             setRealCurrentWeek(data.week.number);
         }
@@ -30,8 +29,6 @@ export default function Home() {
 
   const completedGames = games.filter(g => g.status.type.completed || g.status.type.state === "post");
   const activeGames = games.filter(g => !g.status.type.completed && g.status.type.state !== "post");
-
-  // STRICT LOGIC: Only show "Live & Upcoming" if we are looking at the current week or later
   const isPastWeek = selectedWeek < realCurrentWeek;
 
   return (
@@ -57,7 +54,6 @@ export default function Home() {
         <div style={{ textAlign: "center", marginTop: "50px" }}>Loading...</div>
       ) : (
         <>
-          {/* THE FIX: This entire block is now hidden if isPastWeek is true */}
           {!isPastWeek && activeGames.length > 0 && (
             <section>
               <h2 style={{ textAlign: "center", marginBottom: "20px", textTransform: "uppercase", fontSize: "18px" }}>
@@ -70,7 +66,6 @@ export default function Home() {
             </section>
           )}
 
-          {/* COMPLETED MATCHES */}
           <section>
             <h2 style={{ textAlign: "center", marginBottom: "20px", textTransform: "uppercase", fontSize: "18px" }}>
               Completed Matches
@@ -89,33 +84,78 @@ export default function Home() {
   );
 }
 
-// ... GameCard component remains the same ...
 function GameCard({ game }) {
   const homeTeam = game.competitions[0].competitors.find(c => c.homeAway === 'home');
   const awayTeam = game.competitions[0].competitors.find(c => c.homeAway === 'away');
   const isFinal = game.status.type.completed || game.status.type.state === "post";
 
+  // LOGO FIX: Added a wrapper with fixed dimensions and flex centering
+  const TeamSection = ({ team, score, isWinner }) => (
+    <div style={{ 
+      display: "flex", 
+      flexDirection: "column", 
+      alignItems: "center", 
+      width: "110px" 
+    }}>
+      {/* Logo Container: Ensures vertical and horizontal centering regardless of image shape */}
+      <div style={{ 
+        height: "65px", 
+        width: "100%", 
+        display: "flex", 
+        justifyContent: "center", 
+        alignItems: "center",
+        marginBottom: "5px"
+      }}>
+        <img 
+          src={team.logo} 
+          alt={team.abbreviation} 
+          style={{ 
+            maxWidth: "60px", 
+            maxHeight: "60px", 
+            objectFit: "contain" 
+          }} 
+        />
+      </div>
+      
+      <div style={{ fontWeight: "bold", fontSize: "14px", marginBottom: "5px" }}>
+        {team.abbreviation}
+      </div>
+      
+      <div style={{ 
+        fontSize: "28px", 
+        fontWeight: "900", 
+        opacity: isFinal && !isWinner ? 0.4 : 1 
+      }}>
+        {score}
+      </div>
+    </div>
+  );
+
   return (
     <div style={{ background: "white", padding: "25px", borderRadius: "15px", width: "380px", boxShadow: "0 4px 12px rgba(0,0,0,0.08)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div style={{ textAlign: "center", width: "100px" }}>
-          <img src={awayTeam.team.logo} alt="" style={{ width: "60px" }} />
-          <div style={{ fontWeight: "bold", fontSize: "14px" }}>{awayTeam.team.abbreviation}</div>
-          <div style={{ fontSize: "28px", fontWeight: "900", opacity: isFinal && parseInt(awayTeam.score) < parseInt(homeTeam.score) ? 0.4 : 1 }}>
-            {awayTeam.score}
+        
+        <TeamSection 
+          team={awayTeam.team} 
+          score={awayTeam.score} 
+          isWinner={parseInt(awayTeam.score) > parseInt(homeTeam.score)} 
+        />
+
+        <div style={{ textAlign: "center", flex: 1 }}>
+          <div style={{ color: "#bbb", fontWeight: "bold", fontSize: "14px" }}>
+            {isFinal ? "FINAL" : "VS"}
+          </div>
+          <div style={{ fontSize: "10px", color: "#999", marginTop: "4px" }}>
+            {game.status.type.shortDetail}
           </div>
         </div>
-        <div style={{ textAlign: "center" }}>
-          <div style={{ color: "#bbb", fontWeight: "bold" }}>{isFinal ? "FINAL" : "VS"}</div>
-          <div style={{ fontSize: "10px", color: "#999" }}>{game.status.type.shortDetail}</div>
-        </div>
-        <div style={{ textAlign: "center", width: "100px" }}>
-          <img src={homeTeam.team.logo} alt="" style={{ width: "60px" }} />
-          <div style={{ fontWeight: "bold", fontSize: "14px" }}>{homeTeam.team.abbreviation}</div>
-          <div style={{ fontSize: "28px", fontWeight: "900", opacity: isFinal && parseInt(homeTeam.score) < parseInt(awayTeam.score) ? 0.4 : 1 }}>
-            {homeTeam.score}
-          </div>
-        </div>
+
+        <TeamSection 
+          team={homeTeam.team} 
+          score={homeTeam.score} 
+          isWinner={parseInt(homeTeam.score) > parseInt(awayTeam.score)} 
+        />
+        
       </div>
     </div>
   );

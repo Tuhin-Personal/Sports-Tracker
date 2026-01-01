@@ -1,6 +1,9 @@
+import Link from 'next/link';
+
 export default async function TeamDetailPage({ params }) {
   const { id } = await params;
 
+  // 1. Fetching Data from ESPN
   const [rosterRes, teamRes, scheduleRes] = await Promise.all([
     fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/${id}/roster`),
     fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/${id}`),
@@ -14,14 +17,30 @@ export default async function TeamDetailPage({ params }) {
   const team = teamData.team;
   const stats = team.record?.items[0]?.stats || [];
 
-  // Logic to calculate Average per Game (Total / Games Played)
+  /**
+   * FIX: Team ID Mapping
+   * ESPN IDs and Rundown IDs do not match. 
+   * Add common mappings here or create a lookup utility.
+   */
+  const getRundownTeamId = (espnId) => {
+    const map = {
+      "1": "85",  // Example: Falcons (ESPN 1 -> Rundown 85)
+      "2": "71",  // Example: Bills
+      // Add other team mappings as you discover them
+    };
+    return map[espnId] || espnId;
+  };
+
+  const rundownId = getRundownTeamId(id);
+
+  // 2. Logic to calculate Average per Game
   const getAverageStat = (statName) => {
     const totalStat = stats.find(s => s.name === statName)?.value || 0;
     const gamesPlayed = stats.find(s => s.name === 'gamesPlayed')?.value || 1; 
     return (totalStat / gamesPlayed).toFixed(1);
   };
 
-  // Improved label logic to fix the "No Spaces" issue in your screenshot
+  // 3. Improved label logic for Roster Categories
   const formatPositionLabel = (label) => {
     const cleanLabel = label.toLowerCase();
     const labels = {
@@ -37,11 +56,14 @@ export default async function TeamDetailPage({ params }) {
   };
 
   return (
-    <main style={{ padding: "40px 20px", color: "black", maxWidth: "1200px", margin: "0 auto", fontFamily: "sans-serif", backgroundColor: "#fff" }}>
+    <main 
+      suppressHydrationWarning 
+      style={{ padding: "40px 20px", color: "black", maxWidth: "1200px", margin: "0 auto", fontFamily: "sans-serif", backgroundColor: "#fff" }}
+    >
       
       {/* HEADER */}
       <div style={{ display: "flex", flexDirection: "column", alignItems: "center", borderBottom: "2px solid #f0f0f0", paddingBottom: "30px" }}>
-        <img src={team.logos[0].href} style={{ width: "120px", marginBottom: "15px" }} alt="" />
+        <img src={team.logos[0].href} style={{ width: "120px", marginBottom: "15px" }} alt={team.displayName} />
         <h1 style={{ margin: 0, fontSize: "42px", fontWeight: "900", textAlign: "center" }}>{team.displayName}</h1>
         <div style={{ marginTop: "12px", fontSize: "18px", fontWeight: "bold", background: "black", color: "white", padding: "8px 25px", borderRadius: "30px" }}>
           {team.record?.items[0]?.summary || "N/A"} | {team.standingSummary}
@@ -51,7 +73,7 @@ export default async function TeamDetailPage({ params }) {
       {/* SCHEDULE SCROLLABLE */}
       <section style={{ marginTop: "40px", position: "relative" }}>
         <h2 style={{ fontSize: "22px", marginBottom: "15px", fontWeight: "800" }}>Season Results & Schedule</h2>
-        <div style={{ display: "flex", overflowX: "auto", gap: "15px", padding: "10px 5px", scrollbarWidth: "thin" }}>
+        <div style={{ display: "flex", overflowX: "auto", gap: "15px", padding: "10px 5px" }}>
           {scheduleData.events.map(event => {
             const comp = event.competitions[0];
             const isCompleted = comp.status.type.completed;
@@ -67,7 +89,6 @@ export default async function TeamDetailPage({ params }) {
                 <div style={{ fontSize: "11px", color: "#64748b", fontWeight: "bold", marginBottom: "12px" }}>
                   {new Date(event.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
                 </div>
-                {/* Away Team Row */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "8px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     <img src={away.team.logos?.[0]?.href} style={{ width: "24px", height: "24px" }} alt="" />
@@ -75,7 +96,6 @@ export default async function TeamDetailPage({ params }) {
                   </div>
                   <span style={{ fontWeight: away.winner ? "900" : "400", fontSize: "16px" }}>{isCompleted ? away.score.displayValue : "--"}</span>
                 </div>
-                {/* Home Team Row */}
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     <img src={home.team.logos?.[0]?.href} style={{ width: "24px", height: "24px" }} alt="" />
@@ -114,15 +134,26 @@ export default async function TeamDetailPage({ params }) {
                 {formatPositionLabel(group.position)}
               </h3>
               {group.items.map(player => (
-                <div key={player.id} style={{ display: "flex", justifyContent: "space-between", padding: "12px 5px", borderBottom: "1px solid #eee" }}>
-                  <span style={{ fontWeight: "600" }}>{player.fullName}</span>
-                  <span style={{ fontWeight: "bold", color: "#888" }}>{player.position.abbreviation} #{player.jersey || '--'}</span>
-                </div>
+                <Link 
+                  key={player.id} 
+                  /* FIX: Pass the rundownId instead of the ESPN id */
+                  href={`/players/${player.id}?teamId=${rundownId}&name=${encodeURIComponent(player.fullName)}`} 
+                  style={{ textDecoration: 'none', color: 'inherit' }}
+                >
+                  <div className="player-row" style={{ display: "flex", justifyContent: "space-between", padding: "12px 5px", borderBottom: "1px solid #eee", cursor: "pointer" }}>
+                    <span style={{ fontWeight: "600" }}>{player.fullName}</span>
+                    <span style={{ fontWeight: "bold", color: "#888" }}>{player.position.abbreviation} #{player.jersey || '--'} →</span>
+                  </div>
+                </Link>
               ))}
             </div>
           ))}
         </div>
       </section>
+
+      <style>{`
+        .player-row:hover { background-color: #f9f9f9; }
+      `}</style>
     </main>
   );
 }

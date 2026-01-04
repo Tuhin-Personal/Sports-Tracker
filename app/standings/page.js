@@ -69,20 +69,92 @@ export default function StandingsPage() {
     return leaders;
   };
 
+  // Check if a team could still win their division
+  const couldWinDivision = (team, conferenceStandings, h2hMap, gameRecords, debugLabel = '') => {
+    const teamAbbr = team.abbreviation?.toUpperCase();
+    const division = getTeamDivision(teamAbbr);
+    if (!division || !conferenceStandings) return false;
+    
+    const divisionAbbrs = divisionMap[division] || [];
+    const teamRec = parseRecord(team.record);
+    const teamMaxWins = teamRec.wins + 1; // Best case: win remaining game
+    
+    // Get all teams in the division from conference standings
+    const divisionTeams = conferenceStandings.filter(t => 
+      divisionAbbrs.includes(t.abbreviation?.toUpperCase())
+    );
+    
+    if (divisionTeams.length === 0) return false;
+    
+    // Find current division leader (team with best record)
+    const sortedDivTeams = [...divisionTeams].sort((a, b) => {
+      const aRec = parseRecord(a.record);
+      const bRec = parseRecord(b.record);
+      if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
+      return bRec.winPct - aRec.winPct;
+    });
+    
+    const currentLeader = sortedDivTeams[0];
+    const leaderAbbr = currentLeader.abbreviation?.toUpperCase();
+    
+    if (leaderAbbr === teamAbbr) return true; // Already division leader
+    
+    const leaderRec = parseRecord(currentLeader.record);
+    const leaderMinWins = leaderRec.wins; // Worst case: lose remaining game
+    
+    // If team can finish with same or more wins than leader's worst case, they could win division
+    if (teamMaxWins >= leaderMinWins) {
+      // If they tie, check head-to-head
+      if (teamMaxWins === leaderMinWins) {
+        const h2h = getHeadToHeadRecord(teamAbbr, leaderAbbr, h2hMap);
+        if (h2h && h2h.total > 0) {
+          const record = h2hMap.get([teamAbbr, leaderAbbr].sort().join('_'));
+          if (record) {
+            const teamWins = record[teamAbbr] || 0;
+            const leaderWins = record[leaderAbbr] || 0;
+            if (teamWins > leaderWins) return true; // Team wins head-to-head
+          }
+        }
+      } else {
+        return true; // Team can finish with more wins
+      }
+    }
+    
+    return false;
+  };
+
   // Check if a team is mathematically eliminated from playoffs
-  const isEliminated = (team, conferenceStandings, allDivLeaders) => {
+  const isEliminated = (team, conferenceStandings, allDivLeaders, h2hMap, gameRecords, debugLabel = '') => {
     const teamAbbr = team.abbreviation?.toUpperCase();
     if (!teamAbbr || !conferenceStandings || conferenceStandings.length === 0) return false;
     
+    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT');
+    
     // If team is a division leader, they can't be eliminated (division leaders get seeds 1-4)
-    if (allDivLeaders && allDivLeaders.has(teamAbbr)) return false;
+    if (allDivLeaders && allDivLeaders.has(teamAbbr)) {
+      if (isDebug) console.log(`${debugLabel} - ${teamAbbr} is a division leader, cannot be eliminated`);
+      return false;
+    }
+    
+    // Check if team could still win their division (if so, they're not eliminated)
+    const couldWinDiv = couldWinDivision(team, conferenceStandings, h2hMap, gameRecords, debugLabel);
+    if (couldWinDiv) {
+      if (isDebug) console.log(`${debugLabel} - ${teamAbbr} could still win their division, cannot be eliminated`);
+      return false;
+    }
     
     const teamRec = parseRecord(team.record);
     const maxPossibleWins = teamRec.wins + 1; // Assuming 1 game remaining (Week 18)
     const maxPossibleWinPct = maxPossibleWins / (teamRec.total + 1);
     
+    if (isDebug) {
+      console.log(`\n${debugLabel} - Checking elimination for ${teamAbbr} (${teamRec.wins}-${teamRec.losses})`);
+      console.log(`  Max possible wins if they win: ${maxPossibleWins}`);
+    }
+    
     // Count how many teams are guaranteed to finish ahead (division leaders + wild cards)
     let teamsGuaranteedAhead = 0;
+    const teamsAhead = [];
     
     // Count division leaders (they get seeds 1-4)
     const divisionLeadersInConf = conferenceStandings.filter(t => {
@@ -90,6 +162,10 @@ export default function StandingsPage() {
       return abbr && abbr !== teamAbbr && allDivLeaders && allDivLeaders.has(abbr);
     });
     teamsGuaranteedAhead += divisionLeadersInConf.length;
+    if (isDebug) {
+      console.log(`  Division leaders ahead: ${divisionLeadersInConf.length} (${divisionLeadersInConf.map(t => t.abbreviation).join(', ')})`);
+      divisionLeadersInConf.forEach(t => teamsAhead.push(`${t.abbreviation} (div leader)`));
+    }
     
     // Count wild card teams that are guaranteed to finish ahead
     for (const otherTeam of conferenceStandings) {
@@ -107,7 +183,16 @@ export default function StandingsPage() {
       if (otherMaxWins > maxPossibleWins || 
           (otherMaxWins === maxPossibleWins && otherMaxWinPct >= maxPossibleWinPct)) {
         teamsGuaranteedAhead++;
+        if (isDebug) {
+          teamsAhead.push(`${otherAbbr} (${otherRec.wins}-${otherRec.losses}, max ${otherMaxWins} wins)`);
+        }
       }
+    }
+    
+    if (isDebug) {
+      console.log(`  Total teams guaranteed ahead: ${teamsGuaranteedAhead}`);
+      console.log(`  Teams ahead: ${teamsAhead.join(', ')}`);
+      console.log(`  Result: ${teamsGuaranteedAhead >= 7 ? 'ELIMINATED' : 'NOT ELIMINATED'} (need 7+ teams ahead to be eliminated)`);
     }
     
     // If 7 or more teams are guaranteed to finish ahead, team is eliminated
@@ -163,14 +248,20 @@ export default function StandingsPage() {
   };
 
   // Check if a division leader has clinched their division (can't lose it even if they lose)
-  const hasClenchedDivision = (team, seed, conferenceStandings, allDivLeaders, h2hMap, gameRecords) => {
+  const hasClenchedDivision = (team, seed, conferenceStandings, allDivLeaders, h2hMap, gameRecords, debugLabel = '') => {
     const teamAbbr = team.abbreviation?.toUpperCase();
     if (!allDivLeaders || !allDivLeaders.has(teamAbbr)) return false;
     if (!seed || seed > 4) return false; // Only division leaders in seeds 1-4
     
+    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT');
+    
     // Get the team's division
     const division = getTeamDivision(teamAbbr);
     if (!division) return false;
+    
+    if (isDebug) {
+      console.log(`\n${debugLabel} - Checking if ${teamAbbr} has clinched ${division}`);
+    }
     
     // Get all teams in the division
     const divisionAbbrs = divisionMap[division] || [];
@@ -182,12 +273,20 @@ export default function StandingsPage() {
     const teamRec = parseRecord(team.record);
     const teamMinWins = teamRec.wins; // Worst case: lose remaining game
     
+    if (isDebug) {
+      console.log(`  ${teamAbbr} current: ${teamRec.wins}-${teamRec.losses}, min if lose: ${teamMinWins} wins`);
+    }
+    
     for (const otherTeam of divisionTeams) {
       const otherAbbr = otherTeam.abbreviation?.toUpperCase();
       if (!otherAbbr || otherAbbr === teamAbbr) continue;
       
       const otherRec = parseRecord(otherTeam.record);
       const otherMaxWins = otherRec.wins + 1; // Best case: win remaining game
+      
+      if (isDebug) {
+        console.log(`  Checking ${otherAbbr} (${otherRec.wins}-${otherRec.losses}, max if win: ${otherMaxWins} wins)`);
+      }
       
       // If other team can finish with same or more wins, check tiebreakers
       if (otherMaxWins >= teamMinWins) {
@@ -200,59 +299,84 @@ export default function StandingsPage() {
             if (record) {
               const otherWins = record[otherAbbr] || 0;
               const teamWins = record[teamAbbr] || 0;
+              if (isDebug) {
+                console.log(`    Head-to-head: ${teamAbbr} ${teamWins}-${otherWins} ${otherAbbr}`);
+              }
               if (otherWins > teamWins) {
+                if (isDebug) console.log(`    ${otherAbbr} could win division on head-to-head - NOT CLINCHED`);
                 return false; // Other team could win on head-to-head
               }
             }
           }
         } else {
+          if (isDebug) console.log(`    ${otherAbbr} could finish with more wins (${otherMaxWins} > ${teamMinWins}) - NOT CLINCHED`);
           return false; // Other team could finish with more wins
         }
+      } else {
+        if (isDebug) console.log(`    ${otherAbbr} cannot catch ${teamAbbr} (max ${otherMaxWins} < min ${teamMinWins})`);
       }
     }
     
+    if (isDebug) console.log(`  Result: ${teamAbbr} has CLINCHED ${division}`);
     return true; // No team can catch them
   };
 
-  const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords) => {
+  const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords, debugLabel = '') => {
     const a = abbr?.toUpperCase().trim(); 
+    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT') || 
+                    debugLabel.includes('Steelers') || debugLabel.includes('Ravens');
+    
+    if (isDebug) {
+      console.log(`\n=== STATUS CHECK: ${a} (Seed ${seed || 'N/A'}) ===`);
+    }
     
     // Priority 1: Check if division leader has clinched division
     if (allDivLeaders && allDivLeaders.has(a)) {
-      const clinchedDiv = hasClenchedDivision(team, seed, conferenceStandings || [], allDivLeaders, h2hMap, gameRecords);
+      if (isDebug) console.log(`  ${a} is a division leader`);
+      const clinchedDiv = hasClenchedDivision(team, seed, conferenceStandings || [], allDivLeaders, h2hMap, gameRecords, debugLabel);
       if (clinchedDiv) {
+        if (isDebug) console.log(`  RESULT: DIV LEADER (clinched)`);
         return { label: "DIV LEADER", color: "#000" };
       }
       // Division leader but not clinched - they're in the hunt
       if (seed && seed <= 7) {
+        if (isDebug) console.log(`  RESULT: IN THE HUNT (division leader but not clinched, seed ${seed})`);
         return { label: "IN THE HUNT", color: "#666" };
       }
+      if (isDebug) console.log(`  RESULT: DIV LEADER (seed ${seed})`);
       return { label: "DIV LEADER", color: "#000" };
     }
     
     // Priority 2: Check if wild card team has clinched playoff spot
     const clinched = hasClenched(team, seed, conferenceStandings || [], allDivLeaders);
     if (clinched) {
+      if (isDebug) console.log(`  RESULT: CLINCHED (x) (wild card team has clinched)`);
       return { label: "CLINCHED (x)", color: "#000" };
     }
     
     // Priority 3: Check if mathematically eliminated
-    const eliminated = isEliminated(team, conferenceStandings || [], allDivLeaders);
-    if (eliminated) return { label: "ELIMINATED", color: "#d32f2f", border: "1px solid #d32f2f" };
+    const eliminated = isEliminated(team, conferenceStandings || [], allDivLeaders, h2hMap, gameRecords, debugLabel);
+    if (eliminated) {
+      if (isDebug) console.log(`  RESULT: ELIMINATED`);
+      return { label: "ELIMINATED", color: "#d32f2f", border: "1px solid #d32f2f" };
+    }
     
     // Priority 4: Check if currently in playoffs (seeds 1-7)
     if (seed && seed <= 7) {
       // Teams in playoff position but not clinched
+      if (isDebug) console.log(`  RESULT: IN THE HUNT (seed ${seed}, in playoff position)`);
       return { label: "IN THE HUNT", color: "#666" };
     }
     
     // Priority 5: Teams that could make playoffs but aren't currently in (seeds 8+)
     if (seed && seed >= 8) {
       // These teams are on the bubble - they could still make it
+      if (isDebug) console.log(`  RESULT: ON THE BUBBLE (seed ${seed}, could make playoffs)`);
       return { label: "ON THE BUBBLE", color: "#856404", bg: "#fff3cd", border: "1px solid #ffeeba" };
     }
     
     // Default fallback
+    if (isDebug) console.log(`  RESULT: IN THE HUNT (default)`);
     return { label: "IN THE HUNT", color: "#666" };
   };
 
@@ -929,7 +1053,8 @@ function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDi
             const rank = i + 1;
             const h2hMap = buildHeadToHeadMap ? buildHeadToHeadMap() : new Map();
             const gameRecords = buildGameRecords ? buildGameRecords() : new Map();
-            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords);
+            const debugLabel = `${title} - ${team.abbreviation}`;
+            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords, debugLabel);
             
             // LOGIC FOR CUSTOM RAIDERS LOGO
             const isRaiders = ["LAS"].includes(team.abbreviation?.toUpperCase());

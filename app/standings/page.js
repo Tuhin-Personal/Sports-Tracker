@@ -82,6 +82,168 @@ export default function StandingsPage() {
     return { label: "IN THE HUNT", color: "#666" };
   };
 
+  // Get team's division
+  const getTeamDivision = (teamAbbr) => {
+    const abbr = teamAbbr?.toUpperCase();
+    for (const [div, abbrs] of Object.entries(divisionMap)) {
+      if (abbrs.includes(abbr)) return div;
+    }
+    return null;
+  };
+
+  // Get team's conference
+  const getTeamConference = (teamAbbr) => {
+    const div = getTeamDivision(teamAbbr);
+    if (!div) return null;
+    return div.startsWith("AFC") ? "AFC" : "NFC";
+  };
+
+  // Check if two teams are in the same division
+  const areInSameDivision = (abbr1, abbr2) => {
+    return getTeamDivision(abbr1) === getTeamDivision(abbr2);
+  };
+
+  // Check if two teams are in the same conference
+  const areInSameConference = (abbr1, abbr2) => {
+    return getTeamConference(abbr1) === getTeamConference(abbr2);
+  };
+
+  // Build comprehensive game records for tiebreaking
+  const buildGameRecords = () => {
+    const records = new Map(); // key: teamAbbr, value: { wins, losses, ties, divisionWins, divisionLosses, confWins, confLosses, opponents: Set }
+    
+    games.forEach(game => {
+      const competition = game.competitions?.[0];
+      if (!competition) return;
+      
+      const competitors = competition.competitors || [];
+      if (competitors.length !== 2) return;
+      
+      const team1 = competitors[0];
+      const team2 = competitors[1];
+      const team1Abbr = team1.team?.abbreviation?.toUpperCase();
+      const team2Abbr = team2.team?.abbreviation?.toUpperCase();
+      
+      if (!team1Abbr || !team2Abbr) return;
+      
+      const team1Score = parseInt(team1.score || 0);
+      const team2Score = parseInt(team2.score || 0);
+      
+      // Skip if game not completed or scores are invalid
+      if (team1Score === 0 && team2Score === 0 && !game.status?.type?.completed) return;
+      
+      // Initialize records if needed
+      if (!records.has(team1Abbr)) {
+        records.set(team1Abbr, { wins: 0, losses: 0, ties: 0, divisionWins: 0, divisionLosses: 0, divisionTies: 0, confWins: 0, confLosses: 0, confTies: 0, opponents: new Set() });
+      }
+      if (!records.has(team2Abbr)) {
+        records.set(team2Abbr, { wins: 0, losses: 0, ties: 0, divisionWins: 0, divisionLosses: 0, divisionTies: 0, confWins: 0, confLosses: 0, confTies: 0, opponents: new Set() });
+      }
+      
+      const team1Record = records.get(team1Abbr);
+      const team2Record = records.get(team2Abbr);
+      
+      // Track opponents for common games calculation
+      team1Record.opponents.add(team2Abbr);
+      team2Record.opponents.add(team1Abbr);
+      
+      const isDivisionGame = areInSameDivision(team1Abbr, team2Abbr);
+      const isConferenceGame = areInSameConference(team1Abbr, team2Abbr);
+      
+      if (team1Score > team2Score) {
+        team1Record.wins++;
+        team2Record.losses++;
+        if (isDivisionGame) {
+          team1Record.divisionWins++;
+          team2Record.divisionLosses++;
+        }
+        if (isConferenceGame) {
+          team1Record.confWins++;
+          team2Record.confLosses++;
+        }
+      } else if (team2Score > team1Score) {
+        team2Record.wins++;
+        team1Record.losses++;
+        if (isDivisionGame) {
+          team2Record.divisionWins++;
+          team1Record.divisionLosses++;
+        }
+        if (isConferenceGame) {
+          team2Record.confWins++;
+          team1Record.confLosses++;
+        }
+      } else {
+        // Tie
+        team1Record.ties++;
+        team2Record.ties++;
+        if (isDivisionGame) {
+          team1Record.divisionTies++;
+          team2Record.divisionTies++;
+        }
+        if (isConferenceGame) {
+          team1Record.confTies++;
+          team2Record.confTies++;
+        }
+      }
+    });
+    
+    return records;
+  };
+
+  // Get common opponents between two teams
+  const getCommonOpponents = (team1Abbr, team2Abbr, gameRecords) => {
+    const team1Rec = gameRecords.get(team1Abbr?.toUpperCase());
+    const team2Rec = gameRecords.get(team2Abbr?.toUpperCase());
+    if (!team1Rec || !team2Rec) return new Set();
+    
+    const common = new Set();
+    team1Rec.opponents.forEach(opp => {
+      if (team2Rec.opponents.has(opp) && opp !== team1Abbr?.toUpperCase() && opp !== team2Abbr?.toUpperCase()) {
+        common.add(opp);
+      }
+    });
+    return common;
+  };
+
+  // Calculate record against common opponents
+  const getCommonGamesRecord = (teamAbbr, commonOpponents, gameRecords) => {
+    if (!commonOpponents || commonOpponents.size === 0) return { wins: 0, losses: 0, ties: 0, winPct: 0 };
+    
+    let wins = 0, losses = 0, ties = 0;
+    
+    games.forEach(game => {
+      const competition = game.competitions?.[0];
+      if (!competition) return;
+      
+      const competitors = competition.competitors || [];
+      if (competitors.length !== 2) return;
+      
+      const team1 = competitors[0];
+      const team2 = competitors[1];
+      const team1Abbr = team1.team?.abbreviation?.toUpperCase();
+      const team2Abbr = team2.team?.abbreviation?.toUpperCase();
+      
+      if (!team1Abbr || !team2Abbr) return;
+      
+      const teamAbbrUpper = teamAbbr.toUpperCase();
+      if (team1Abbr !== teamAbbrUpper && team2Abbr !== teamAbbrUpper) return;
+      
+      const opponentAbbr = team1Abbr === teamAbbrUpper ? team2Abbr : team1Abbr;
+      if (!commonOpponents.has(opponentAbbr)) return;
+      
+      const teamScore = team1Abbr === teamAbbrUpper ? parseInt(team1.score || 0) : parseInt(team2.score || 0);
+      const oppScore = team1Abbr === teamAbbrUpper ? parseInt(team2.score || 0) : parseInt(team1.score || 0);
+      
+      if (teamScore > oppScore) wins++;
+      else if (oppScore > teamScore) losses++;
+      else ties++;
+    });
+    
+    const total = wins + losses + ties;
+    const winPct = total > 0 ? (wins + ties * 0.5) / total : 0;
+    return { wins, losses, ties, winPct, total };
+  };
+
   // Build head-to-head record map from games
   const buildHeadToHeadMap = () => {
     const h2hMap = new Map(); // key: "TEAM1_TEAM2", value: { TEAM1: wins, TEAM2: wins }
@@ -169,7 +331,7 @@ export default function StandingsPage() {
   };
 
   // Break tie between two teams using NFL tiebreaking procedures
-  const breakTie = (teamA, teamB, h2hMap, isDivision = false) => {
+  const breakTie = (teamA, teamB, h2hMap, gameRecords, isDivision = false) => {
     const aAbbr = teamA.abbreviation?.toUpperCase();
     const bAbbr = teamB.abbreviation?.toUpperCase();
     if (!aAbbr || !bAbbr) return 0;
@@ -180,34 +342,67 @@ export default function StandingsPage() {
     // Step 1: Head-to-head (always first for two teams)
     const h2h = getHeadToHeadRecord(aAbbr, bAbbr, h2hMap);
     if (h2h && h2h.total > 0) {
-      // The record key is sorted alphabetically, so we need to figure out which team is which
-      const sortedKey = [aAbbr, bAbbr].sort();
-      const aWinsInH2H = aAbbr === sortedKey[0] ? h2h.team1Wins : h2h.team2Wins;
-      const bWinsInH2H = bAbbr === sortedKey[0] ? h2h.team1Wins : h2h.team2Wins;
-      
-      // Actually simpler: just check the record object directly
-      const record = h2hMap.get(sortedKey.join('_'));
+      const record = h2hMap.get([aAbbr, bAbbr].sort().join('_'));
       if (record) {
         const aWins = record[aAbbr] || 0;
         const bWins = record[bAbbr] || 0;
         if (aWins > bWins) return -1; // Team A wins head-to-head
         if (bWins > aWins) return 1; // Team B wins head-to-head
+        // If tied 1-1, continue to next step
       }
     }
     
-    // If head-to-head is tied or no games played, continue with other criteria
-    // For now, we'll use win percentage as fallback (Step 2 would be division record, etc.)
-    // Since we don't have division/conference record breakdowns, we'll use overall record
+    // Step 2: Best won-lost-tied percentage in games played within the division (if same division)
+    if (isDivision && areInSameDivision(aAbbr, bAbbr)) {
+      const aGameRec = gameRecords.get(aAbbr);
+      const bGameRec = gameRecords.get(bAbbr);
+      if (aGameRec && bGameRec) {
+        const aDivTotal = aGameRec.divisionWins + aGameRec.divisionLosses + aGameRec.divisionTies;
+        const bDivTotal = bGameRec.divisionWins + bGameRec.divisionLosses + bGameRec.divisionTies;
+        if (aDivTotal > 0 && bDivTotal > 0) {
+          const aDivPct = (aGameRec.divisionWins + aGameRec.divisionTies * 0.5) / aDivTotal;
+          const bDivPct = (bGameRec.divisionWins + bGameRec.divisionTies * 0.5) / bDivTotal;
+          if (bDivPct !== aDivPct) return bDivPct - aDivPct;
+        }
+      }
+    }
+    
+    // Step 3: Best won-lost-tied percentage in common games (minimum of 4)
+    const commonOpponents = getCommonOpponents(aAbbr, bAbbr, gameRecords);
+    if (commonOpponents.size >= 4) {
+      const aCommonRec = getCommonGamesRecord(aAbbr, commonOpponents, gameRecords);
+      const bCommonRec = getCommonGamesRecord(bAbbr, commonOpponents, gameRecords);
+      if (aCommonRec.total >= 4 && bCommonRec.total >= 4) {
+        if (bCommonRec.winPct !== aCommonRec.winPct) {
+          return bCommonRec.winPct - aCommonRec.winPct;
+        }
+      }
+    }
+    
+    // Step 4: Best won-lost-tied percentage in games played within the conference
+    const aGameRec = gameRecords.get(aAbbr);
+    const bGameRec = gameRecords.get(bAbbr);
+    if (aGameRec && bGameRec && areInSameConference(aAbbr, bAbbr)) {
+      const aConfTotal = aGameRec.confWins + aGameRec.confLosses + aGameRec.confTies;
+      const bConfTotal = bGameRec.confWins + bGameRec.confLosses + bGameRec.confTies;
+      if (aConfTotal > 0 && bConfTotal > 0) {
+        const aConfPct = (aGameRec.confWins + aGameRec.confTies * 0.5) / aConfTotal;
+        const bConfPct = (bGameRec.confWins + bGameRec.confTies * 0.5) / bConfTotal;
+        if (bConfPct !== aConfPct) return bConfPct - aConfPct;
+      }
+    }
+    
+    // Fallback to overall record
     if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
     if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
     return aRec.losses - bRec.losses; // Fewer losses is better
   };
 
   // Break tie between multiple teams (3+)
-  const breakMultiTeamTie = (tiedTeams, h2hMap, isDivision = false) => {
+  const breakMultiTeamTie = (tiedTeams, h2hMap, gameRecords, isDivision = false) => {
     if (tiedTeams.length <= 1) return tiedTeams;
     if (tiedTeams.length === 2) {
-      const sorted = [...tiedTeams].sort((a, b) => breakTie(a, b, h2hMap, isDivision));
+      const sorted = [...tiedTeams].sort((a, b) => breakTie(a, b, h2hMap, gameRecords, isDivision));
       return sorted;
     }
     
@@ -224,22 +419,25 @@ export default function StandingsPage() {
         if (otherAbbr === teamAbbr) continue;
         const h2h = getHeadToHeadRecord(teamAbbr, otherAbbr, h2hMap);
         if (h2h && h2h.total > 0) {
-          const teamWins = h2h.team1Wins || h2h.team2Wins;
-          const otherWins = h2h.team1Wins === teamWins ? h2h.team2Wins : h2h.team1Wins;
-          if (teamWins > otherWins) winsAgainstOthers++;
-          else if (otherWins > teamWins) lossesAgainstOthers++;
+          const record = h2hMap.get([teamAbbr, otherAbbr].sort().join('_'));
+          if (record) {
+            const teamWins = record[teamAbbr] || 0;
+            const otherWins = record[otherAbbr] || 0;
+            if (teamWins > otherWins) winsAgainstOthers++;
+            else if (otherWins > teamWins) lossesAgainstOthers++;
+          }
         }
       }
       
       // If team beat all others, they win
       if (winsAgainstOthers === tiedTeams.length - 1) {
         const remaining = tiedTeams.filter(t => t.abbreviation?.toUpperCase() !== teamAbbr);
-        return [team, ...breakMultiTeamTie(remaining, h2hMap, isDivision)];
+        return [team, ...breakMultiTeamTie(remaining, h2hMap, gameRecords, isDivision)];
       }
       // If team lost to all others, they're eliminated
       if (lossesAgainstOthers === tiedTeams.length - 1) {
         const remaining = tiedTeams.filter(t => t.abbreviation?.toUpperCase() !== teamAbbr);
-        return [...breakMultiTeamTie(remaining, h2hMap, isDivision), team];
+        return [...breakMultiTeamTie(remaining, h2hMap, gameRecords, isDivision), team];
       }
     }
     
@@ -259,6 +457,7 @@ export default function StandingsPage() {
     const leaders = new Set();
     const conferenceDivisions = getConferenceDivisions(confId);
     const h2hMap = buildHeadToHeadMap();
+    const gameRecords = buildGameRecords();
     
     conferenceDivisions.forEach(([div, abbrs]) => {
       const divTeams = conferenceTeams.filter(t => {
@@ -296,9 +495,9 @@ export default function StandingsPage() {
         if (bestRecordTeams.length === 1) {
           sorted = bestRecordTeams;
         } else if (bestRecordTeams.length === 2) {
-          sorted = [...bestRecordTeams].sort((a, b) => breakTie(a, b, h2hMap, true));
+          sorted = [...bestRecordTeams].sort((a, b) => breakTie(a, b, h2hMap, gameRecords, true));
         } else {
-          sorted = breakMultiTeamTie(bestRecordTeams, h2hMap, true);
+          sorted = breakMultiTeamTie(bestRecordTeams, h2hMap, gameRecords, true);
         }
         
         if (sorted.length > 0) {
@@ -307,15 +506,17 @@ export default function StandingsPage() {
             leaders.add(leaderAbbr);
             // Debug: Log division leader calculation
             if (div === "NFC South") {
-              console.log(`NFC South leader: ${sorted[0].name} (${sorted[0].abbreviation}) - Record: ${sorted[0].record}`, {
-                wins: parseRecord(sorted[0].record).wins,
-                losses: parseRecord(sorted[0].record).losses
-              });
+              console.log(`NFC South leader: ${sorted[0].name} (${sorted[0].abbreviation}) - Record: ${sorted[0].record}`);
               if (bestRecordTeams.length > 1) {
-                const h2h = getHeadToHeadRecord(sorted[0].abbreviation?.toUpperCase(), 
-                  bestRecordTeams.find(t => t.abbreviation?.toUpperCase() !== leaderAbbr)?.abbreviation?.toUpperCase(), 
-                  h2hMap);
-                console.log("Head-to-head:", h2h);
+                const otherTeam = bestRecordTeams.find(t => t.abbreviation?.toUpperCase() !== leaderAbbr);
+                if (otherTeam) {
+                  const h2h = getHeadToHeadRecord(leaderAbbr, otherTeam.abbreviation?.toUpperCase(), h2hMap);
+                  const commonOpps = getCommonOpponents(leaderAbbr, otherTeam.abbreviation?.toUpperCase(), gameRecords);
+                  const leaderCommon = getCommonGamesRecord(leaderAbbr, commonOpps, gameRecords);
+                  const otherCommon = getCommonGamesRecord(otherTeam.abbreviation?.toUpperCase(), commonOpps, gameRecords);
+                  console.log("Head-to-head:", h2h);
+                  console.log("Common games - Leader:", leaderCommon, "Other:", otherCommon);
+                }
               }
             }
           }
@@ -330,6 +531,7 @@ export default function StandingsPage() {
     const conferenceTeams = teams.filter(t => t.conference?.conference_id === confId);
     const divisionLeaders = getDivisionLeaders(confId);
     const h2hMap = buildHeadToHeadMap();
+    const gameRecords = buildGameRecords();
     
     // Separate division leaders and wild card teams
     const leaders = conferenceTeams.filter(t => {
@@ -347,8 +549,8 @@ export default function StandingsPage() {
       const bRec = parseRecord(b.record);
       if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
       if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
-      // If tied, use head-to-head
-      return breakTie(a, b, h2hMap, false);
+      // If tied, use tiebreaker
+      return breakTie(a, b, h2hMap, gameRecords, false);
     };
     
     // Sort division leaders and wild cards separately
@@ -395,13 +597,14 @@ export default function StandingsPage() {
             {["AFC East", "AFC North", "AFC South", "AFC West"].map(div => {
               const divTeams = teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase()));
               const h2hMap = buildHeadToHeadMap();
+              const gameRecords = buildGameRecords();
               const sorted = divTeams.sort((a, b) => {
                 const aRec = parseRecord(a.record);
                 const bRec = parseRecord(b.record);
                 if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
                 if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
                 // Use tiebreaker for tied records
-                return breakTie(a, b, h2hMap, true);
+                return breakTie(a, b, h2hMap, gameRecords, true);
               });
               return (
                 <div key={div} style={{ marginBottom: "40px" }}>
@@ -417,13 +620,14 @@ export default function StandingsPage() {
             {["NFC East", "NFC North", "NFC South", "NFC West"].map(div => {
               const divTeams = teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase()));
               const h2hMap = buildHeadToHeadMap();
+              const gameRecords = buildGameRecords();
               const sorted = divTeams.sort((a, b) => {
                 const aRec = parseRecord(a.record);
                 const bRec = parseRecord(b.record);
                 if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
                 if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
                 // Use tiebreaker for tied records
-                return breakTie(a, b, h2hMap, true);
+                return breakTie(a, b, h2hMap, gameRecords, true);
               });
               return (
                 <div key={div} style={{ marginBottom: "40px" }}>

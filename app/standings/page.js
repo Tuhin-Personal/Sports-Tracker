@@ -248,11 +248,8 @@ export default function StandingsPage() {
     if (isDebug) {
       console.log(`\n${debugLabel} - Checking elimination for ${teamAbbr} (${teamRec.wins}-${teamRec.losses})`);
       console.log(`  Max possible wins if they win: ${maxPossibleWins}`);
-      console.log(`  Checking if ${teamAbbr} could make wild card...`);
     }
     
-    // Check if team could still make playoffs as a wild card (if so, they're not eliminated)
-    // A team can make wild card if they can finish in seeds 5-7
     // Count how many teams are guaranteed to finish ahead (division leaders + wild cards)
     let teamsGuaranteedAhead = 0;
     const teamsAhead = [];
@@ -277,15 +274,15 @@ export default function StandingsPage() {
       if (allDivLeaders && allDivLeaders.has(otherAbbr)) continue;
       
       const otherRec = parseRecord(otherTeam.record);
-      const otherMinWins = otherRec.wins; // Worst case: lose remaining game
-      const otherMinWinPct = otherMinWins / (otherRec.total + 1);
+      const otherMaxWins = otherRec.wins + 1;
+      const otherMaxWinPct = otherMaxWins / (otherRec.total + 1);
       
-      // If other team's worst case is better than this team's best case, they're guaranteed ahead
-      if (otherMinWins > maxPossibleWins || 
-          (otherMinWins === maxPossibleWins && otherMinWinPct >= maxPossibleWinPct)) {
+      // If other team can finish with more wins, or same wins but better win percentage
+      if (otherMaxWins > maxPossibleWins || 
+          (otherMaxWins === maxPossibleWins && otherMaxWinPct >= maxPossibleWinPct)) {
         teamsGuaranteedAhead++;
         if (isDebug) {
-          teamsAhead.push(`${otherAbbr} (${otherRec.wins}-${otherRec.losses}, min ${otherMinWins} wins)`);
+          teamsAhead.push(`${otherAbbr} (${otherRec.wins}-${otherRec.losses}, max ${otherMaxWins} wins)`);
         }
       }
     }
@@ -354,8 +351,7 @@ export default function StandingsPage() {
     if (!allDivLeaders || !allDivLeaders.has(teamAbbr)) return false;
     if (!seed || seed > 4) return false; // Only division leaders in seeds 1-4
     
-    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT') ||
-                    debugLabel.includes('NFC South') || debugLabel.includes('CAR') || debugLabel.includes('TB') || debugLabel.includes('ATL');
+    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT');
     
     // Get the team's division
     const division = getTeamDivision(teamAbbr);
@@ -374,13 +370,9 @@ export default function StandingsPage() {
     // Check if any other team in the division could catch them
     const teamRec = parseRecord(team.record);
     const teamMinWins = teamRec.wins; // Worst case: lose remaining game
-    const teamGameRec = gameRecords.get(teamAbbr);
     
     if (isDebug) {
       console.log(`  ${teamAbbr} current: ${teamRec.wins}-${teamRec.losses}, min if lose: ${teamMinWins} wins`);
-      if (teamGameRec) {
-        console.log(`  ${teamAbbr} divisional record: ${teamGameRec.divisionWins}-${teamGameRec.divisionLosses}-${teamGameRec.divisionTies}`);
-      }
     }
     
     for (const otherTeam of divisionTeams) {
@@ -389,71 +381,28 @@ export default function StandingsPage() {
       
       const otherRec = parseRecord(otherTeam.record);
       const otherMaxWins = otherRec.wins + 1; // Best case: win remaining game
-      const otherGameRec = gameRecords.get(otherAbbr);
       
       if (isDebug) {
         console.log(`  Checking ${otherAbbr} (${otherRec.wins}-${otherRec.losses}, max if win: ${otherMaxWins} wins)`);
-        if (otherGameRec) {
-          console.log(`    ${otherAbbr} divisional record: ${otherGameRec.divisionWins}-${otherGameRec.divisionLosses}-${otherGameRec.divisionTies}`);
-        }
       }
       
       // If other team can finish with same or more wins, check tiebreakers
       if (otherMaxWins >= teamMinWins) {
         // If they tie, check if other team could win the tiebreaker
         if (otherMaxWins === teamMinWins) {
-          // Check if remaining game is divisional
-          const isDivisionalGame = areInSameDivision(teamAbbr, otherAbbr);
-          
-          if (isDivisionalGame && teamGameRec && otherGameRec) {
-            // If they play each other, calculate new divisional records
-            const teamDivWinsIfLose = teamGameRec.divisionWins; // Lose to other
-            const teamDivLossesIfLose = teamGameRec.divisionLosses + 1;
-            const otherDivWinsIfWin = otherGameRec.divisionWins + 1; // Beat team
-            const otherDivLossesIfWin = otherGameRec.divisionLosses;
-            
-            const teamDivTotal = teamDivWinsIfLose + teamDivLossesIfLose;
-            const otherDivTotal = otherDivWinsIfWin + otherDivLossesIfWin;
-            const teamDivPct = teamDivTotal > 0 ? teamDivWinsIfLose / teamDivTotal : 0;
-            const otherDivPct = otherDivTotal > 0 ? otherDivWinsIfWin / otherDivTotal : 0;
-            
-            if (isDebug) {
-              console.log(`    Remaining game is divisional`);
-              console.log(`    If ${otherAbbr} wins: ${teamAbbr} ${teamDivWinsIfLose}-${teamDivLossesIfLose} (${(teamDivPct * 100).toFixed(1)}%) vs ${otherAbbr} ${otherDivWinsIfWin}-${otherDivLossesIfWin} (${(otherDivPct * 100).toFixed(1)}%)`);
-            }
-            
-            if (otherDivPct > teamDivPct || (otherDivPct === teamDivPct && otherDivWinsIfWin > teamDivWinsIfLose)) {
-              if (isDebug) console.log(`    ${otherAbbr} could win division on divisional record - NOT CLINCHED`);
-              return false; // Other team could win on divisional record
-            }
-          } else {
-            // Check head-to-head - if other team won, they could take the division
-            const h2h = getHeadToHeadRecord(teamAbbr, otherAbbr, h2hMap);
-            if (h2h && h2h.total > 0) {
-              const record = h2hMap.get([teamAbbr, otherAbbr].sort().join('_'));
-              if (record) {
-                const otherWins = record[otherAbbr] || 0;
-                const teamWins = record[teamAbbr] || 0;
-                if (isDebug) {
-                  console.log(`    Head-to-head: ${teamAbbr} ${teamWins}-${otherWins} ${otherAbbr}`);
-                }
-                if (otherWins > teamWins) {
-                  if (isDebug) console.log(`    ${otherAbbr} could win division on head-to-head - NOT CLINCHED`);
-                  return false; // Other team could win on head-to-head
-                }
+          // Check head-to-head - if other team won, they could take the division
+          const h2h = getHeadToHeadRecord(teamAbbr, otherAbbr, h2hMap);
+          if (h2h && h2h.total > 0) {
+            const record = h2hMap.get([teamAbbr, otherAbbr].sort().join('_'));
+            if (record) {
+              const otherWins = record[otherAbbr] || 0;
+              const teamWins = record[teamAbbr] || 0;
+              if (isDebug) {
+                console.log(`    Head-to-head: ${teamAbbr} ${teamWins}-${otherWins} ${otherAbbr}`);
               }
-            }
-            
-            // Check divisional record if head-to-head is tied
-            if (teamGameRec && otherGameRec) {
-              const teamDivTotal = teamGameRec.divisionWins + teamGameRec.divisionLosses;
-              const otherDivTotal = otherGameRec.divisionWins + otherGameRec.divisionLosses;
-              const teamDivPct = teamDivTotal > 0 ? teamGameRec.divisionWins / teamDivTotal : 0;
-              const otherDivPct = otherDivTotal > 0 ? otherGameRec.divisionWins / otherDivTotal : 0;
-              
-              if (otherDivPct > teamDivPct || (otherDivPct === teamDivPct && otherGameRec.divisionWins > teamGameRec.divisionWins)) {
-                if (isDebug) console.log(`    ${otherAbbr} has better divisional record - NOT CLINCHED`);
-                return false;
+              if (otherWins > teamWins) {
+                if (isDebug) console.log(`    ${otherAbbr} could win division on head-to-head - NOT CLINCHED`);
+                return false; // Other team could win on head-to-head
               }
             }
           }
@@ -473,8 +422,7 @@ export default function StandingsPage() {
   const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords, debugLabel = '') => {
     const a = abbr?.toUpperCase().trim(); 
     const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT') || 
-                    debugLabel.includes('Steelers') || debugLabel.includes('Ravens') ||
-                    debugLabel.includes('NFC South') || debugLabel.includes('CAR') || debugLabel.includes('TB') || debugLabel.includes('ATL');
+                    debugLabel.includes('Steelers') || debugLabel.includes('Ravens');
     
     if (isDebug) {
       console.log(`\n=== STATUS CHECK: ${a} (Seed ${seed || 'N/A'}) ===`);
@@ -1145,9 +1093,9 @@ export default function StandingsPage() {
                 return breakTie(a, b, h2hMap, gameRecords, true);
               });
               return (
-              <div key={div} style={{ marginBottom: "40px" }}>
+                <div key={div} style={{ marginBottom: "40px" }}>
                   <StandingsTable title={div} teams={sorted} getStatus={getStatus} isDivisionView={true} allDivLeaders={allDivLeaders} />
-              </div>
+                </div>
               );
             })}
           </div>
@@ -1168,9 +1116,9 @@ export default function StandingsPage() {
                 return breakTie(a, b, h2hMap, gameRecords, true);
               });
               return (
-              <div key={div} style={{ marginBottom: "40px" }}>
+                <div key={div} style={{ marginBottom: "40px" }}>
                   <StandingsTable title={div} teams={sorted} getStatus={getStatus} isDivisionView={true} allDivLeaders={allDivLeaders} />
-              </div>
+                </div>
               );
             })}
           </div>

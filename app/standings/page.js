@@ -31,6 +31,19 @@ export default function StandingsPage() {
         const filtered = (data.teams || []).filter(t => 
           t.abbreviation && t.mascot && !["AFC", "NFC", "PRO"].includes(t.abbreviation.toUpperCase())
         );
+        // Debug: Log NFC South teams to verify data
+        const nfcSouth = filtered.filter(t => {
+          const abbr = t.abbreviation?.toUpperCase();
+          return abbr && ["ATL", "CAR", "NO", "TB"].includes(abbr);
+        });
+        if (nfcSouth.length > 0) {
+          console.log("NFC South teams:", nfcSouth.map(t => ({
+            name: t.name,
+            abbr: t.abbreviation,
+            record: t.record,
+            conf: t.conference?.conference_id
+          })));
+        }
         setTeams(filtered);
       } catch (err) { console.error(err); } finally { setLoading(false); }
     }
@@ -42,6 +55,7 @@ export default function StandingsPage() {
 
   // Get all division leaders dynamically
   const getAllDivisionLeaders = () => {
+    if (teams.length === 0) return new Set();
     const leaders = new Set();
     const afcLeaders = getDivisionLeaders(33);
     const nfcLeaders = getDivisionLeaders(34);
@@ -65,36 +79,73 @@ export default function StandingsPage() {
 
   // Parse win-loss record string (e.g., "10-7" or "9-8") to get wins and win percentage
   const parseRecord = (recordStr) => {
-    if (!recordStr || typeof recordStr !== 'string') return { wins: 0, losses: 0, winPct: 0 };
-    const parts = recordStr.split('-');
-    const wins = parseInt(parts[0]) || 0;
-    const losses = parseInt(parts[1]) || 0;
-    const total = wins + losses;
-    const winPct = total > 0 ? wins / total : 0;
-    return { wins, losses, winPct, total };
+    if (!recordStr) return { wins: 0, losses: 0, winPct: 0, total: 0 };
+    
+    // Handle string format like "10-7" or number format
+    if (typeof recordStr === 'string') {
+      const parts = recordStr.split('-');
+      if (parts.length >= 2) {
+        const wins = parseInt(parts[0].trim()) || 0;
+        const losses = parseInt(parts[1].trim()) || 0;
+        const total = wins + losses;
+        const winPct = total > 0 ? wins / total : 0;
+        return { wins, losses, winPct, total };
+      }
+    }
+    
+    return { wins: 0, losses: 0, winPct: 0, total: 0 };
+  };
+
+  // Get divisions for a specific conference
+  const getConferenceDivisions = (confId) => {
+    const isAFC = confId === 33;
+    return Object.entries(divisionMap).filter(([div]) => 
+      isAFC ? div.startsWith("AFC") : div.startsWith("NFC")
+    );
   };
 
   // Get division leader for each division
   const getDivisionLeaders = (confId) => {
     const conferenceTeams = teams.filter(t => t.conference?.conference_id === confId);
     const leaders = new Set();
+    const conferenceDivisions = getConferenceDivisions(confId);
     
-    Object.entries(divisionMap).forEach(([div, abbrs]) => {
-      const divTeams = conferenceTeams.filter(t => 
-        abbrs.includes(t.abbreviation?.toUpperCase())
-      );
+    conferenceDivisions.forEach(([div, abbrs]) => {
+      const divTeams = conferenceTeams.filter(t => {
+        const teamAbbr = t.abbreviation?.toUpperCase();
+        return teamAbbr && abbrs.includes(teamAbbr);
+      });
+      
       if (divTeams.length === 0) return;
       
       // Sort by wins, then win percentage
-      const sorted = divTeams.sort((a, b) => {
+      const sorted = [...divTeams].sort((a, b) => {
         const aRec = parseRecord(a.record);
         const bRec = parseRecord(b.record);
         if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
-        return bRec.winPct - aRec.winPct;
+        if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
+        // If still tied, sort by losses (fewer losses is better)
+        return aRec.losses - bRec.losses;
       });
       
       if (sorted.length > 0) {
-        leaders.add(sorted[0].abbreviation?.toUpperCase());
+        const leaderAbbr = sorted[0].abbreviation?.toUpperCase();
+        if (leaderAbbr) {
+          leaders.add(leaderAbbr);
+          // Debug: Log division leader calculation
+          if (div === "NFC South") {
+            console.log(`NFC South leader: ${sorted[0].name} (${sorted[0].abbreviation}) - Record: ${sorted[0].record}`, {
+              wins: parseRecord(sorted[0].record).wins,
+              losses: parseRecord(sorted[0].record).losses
+            });
+            console.log("All NFC South teams:", sorted.map(t => ({
+              name: t.name,
+              abbr: t.abbreviation,
+              record: t.record,
+              parsed: parseRecord(t.record)
+            })));
+          }
+        }
       }
     });
     
@@ -106,24 +157,28 @@ export default function StandingsPage() {
     const divisionLeaders = getDivisionLeaders(confId);
     
     // Separate division leaders and wild card teams
-    const leaders = conferenceTeams.filter(t => 
-      divisionLeaders.has(t.abbreviation?.toUpperCase())
-    );
-    const wildCards = conferenceTeams.filter(t => 
-      !divisionLeaders.has(t.abbreviation?.toUpperCase())
-    );
+    const leaders = conferenceTeams.filter(t => {
+      const abbr = t.abbreviation?.toUpperCase();
+      return abbr && divisionLeaders.has(abbr);
+    });
+    const wildCards = conferenceTeams.filter(t => {
+      const abbr = t.abbreviation?.toUpperCase();
+      return abbr && !divisionLeaders.has(abbr);
+    });
     
-    // Sort function: by wins, then win percentage
+    // Sort function: by wins, then win percentage, then losses
     const sortByRecord = (a, b) => {
       const aRec = parseRecord(a.record);
       const bRec = parseRecord(b.record);
       if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
-      return bRec.winPct - aRec.winPct;
+      if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
+      // If still tied, fewer losses is better
+      return aRec.losses - bRec.losses;
     };
     
     // Sort division leaders and wild cards separately
-    const sortedLeaders = leaders.sort(sortByRecord);
-    const sortedWildCards = wildCards.sort(sortByRecord);
+    const sortedLeaders = [...leaders].sort(sortByRecord);
+    const sortedWildCards = [...wildCards].sort(sortByRecord);
     
     // Combine: division leaders first (seeds 1-4), then wild cards (seeds 5-7)
     return [...sortedLeaders, ...sortedWildCards];
@@ -131,6 +186,7 @@ export default function StandingsPage() {
 
   if (loading) return <div style={{ textAlign: "center", padding: "100px" }}>Loading 2025 Standings...</div>;
 
+  // Calculate division leaders when rendering
   const allDivLeaders = getAllDivisionLeaders();
 
   return (

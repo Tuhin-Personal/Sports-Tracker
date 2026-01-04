@@ -331,13 +331,15 @@ export default function StandingsPage() {
   };
 
   // Break tie between two teams using NFL tiebreaking procedures
-  const breakTie = (teamA, teamB, h2hMap, gameRecords, isDivision = false) => {
+  const breakTie = (teamA, teamB, h2hMap, gameRecords, isDivision = false, debugLabel = '') => {
     const aAbbr = teamA.abbreviation?.toUpperCase();
     const bAbbr = teamB.abbreviation?.toUpperCase();
     if (!aAbbr || !bAbbr) return 0;
     
     const aRec = parseRecord(teamA.record);
     const bRec = parseRecord(teamB.record);
+    
+    const isDebug = debugLabel.includes('NFC South');
     
     // Step 1: Head-to-head (always first for two teams)
     const h2h = getHeadToHeadRecord(aAbbr, bAbbr, h2hMap);
@@ -346,9 +348,18 @@ export default function StandingsPage() {
       if (record) {
         const aWins = record[aAbbr] || 0;
         const bWins = record[bAbbr] || 0;
-        if (aWins > bWins) return -1; // Team A wins head-to-head
-        if (bWins > aWins) return 1; // Team B wins head-to-head
-        // If tied 1-1, continue to next step
+        if (isDebug) {
+          console.log(`${debugLabel} - Step 1 (Head-to-head): ${aAbbr} ${aWins}-${bWins} ${bAbbr}`);
+        }
+        if (aWins > bWins) {
+          if (isDebug) console.log(`${debugLabel} - ${aAbbr} wins on head-to-head`);
+          return -1; // Team A wins head-to-head
+        }
+        if (bWins > aWins) {
+          if (isDebug) console.log(`${debugLabel} - ${bAbbr} wins on head-to-head`);
+          return 1; // Team B wins head-to-head
+        }
+        if (isDebug) console.log(`${debugLabel} - Head-to-head is tied, moving to Step 2`);
       }
     }
     
@@ -362,21 +373,40 @@ export default function StandingsPage() {
         if (aDivTotal > 0 && bDivTotal > 0) {
           const aDivPct = (aGameRec.divisionWins + aGameRec.divisionTies * 0.5) / aDivTotal;
           const bDivPct = (bGameRec.divisionWins + bGameRec.divisionTies * 0.5) / bDivTotal;
-          if (bDivPct !== aDivPct) return bDivPct - aDivPct;
+          if (isDebug) {
+            console.log(`${debugLabel} - Step 2 (Division Record): ${aAbbr} ${aGameRec.divisionWins}-${aGameRec.divisionLosses}-${aGameRec.divisionTies} (${(aDivPct * 100).toFixed(1)}%) vs ${bAbbr} ${bGameRec.divisionWins}-${bGameRec.divisionLosses}-${bGameRec.divisionTies} (${(bDivPct * 100).toFixed(1)}%)`);
+          }
+          if (bDivPct !== aDivPct) {
+            if (isDebug) console.log(`${debugLabel} - ${bDivPct > aDivPct ? bAbbr : aAbbr} wins on division record`);
+            return bDivPct - aDivPct;
+          }
+          if (isDebug) console.log(`${debugLabel} - Division record is tied, moving to Step 3`);
         }
       }
     }
     
     // Step 3: Best won-lost-tied percentage in common games (minimum of 4)
     const commonOpponents = getCommonOpponents(aAbbr, bAbbr, gameRecords);
+    if (isDebug) {
+      console.log(`${debugLabel} - Common opponents:`, Array.from(commonOpponents));
+    }
     if (commonOpponents.size >= 4) {
       const aCommonRec = getCommonGamesRecord(aAbbr, commonOpponents, gameRecords);
       const bCommonRec = getCommonGamesRecord(bAbbr, commonOpponents, gameRecords);
+      if (isDebug) {
+        console.log(`${debugLabel} - Step 3 (Common Games): ${aAbbr} ${aCommonRec.wins}-${aCommonRec.losses}-${aCommonRec.ties} (${(aCommonRec.winPct * 100).toFixed(1)}%, ${aCommonRec.total} games) vs ${bAbbr} ${bCommonRec.wins}-${bCommonRec.losses}-${bCommonRec.ties} (${(bCommonRec.winPct * 100).toFixed(1)}%, ${bCommonRec.total} games)`);
+      }
       if (aCommonRec.total >= 4 && bCommonRec.total >= 4) {
         if (bCommonRec.winPct !== aCommonRec.winPct) {
+          if (isDebug) console.log(`${debugLabel} - ${bCommonRec.winPct > aCommonRec.winPct ? bAbbr : aAbbr} wins on common games`);
           return bCommonRec.winPct - aCommonRec.winPct;
         }
+        if (isDebug) console.log(`${debugLabel} - Common games record is tied, moving to Step 4`);
+      } else if (isDebug) {
+        console.log(`${debugLabel} - Not enough common games (need 4, have ${aCommonRec.total}/${bCommonRec.total}), moving to Step 4`);
       }
+    } else if (isDebug) {
+      console.log(`${debugLabel} - Not enough common opponents (need 4, have ${commonOpponents.size}), moving to Step 4`);
     }
     
     // Step 4: Best won-lost-tied percentage in games played within the conference
@@ -388,11 +418,21 @@ export default function StandingsPage() {
       if (aConfTotal > 0 && bConfTotal > 0) {
         const aConfPct = (aGameRec.confWins + aGameRec.confTies * 0.5) / aConfTotal;
         const bConfPct = (bGameRec.confWins + bGameRec.confTies * 0.5) / bConfTotal;
-        if (bConfPct !== aConfPct) return bConfPct - aConfPct;
+        if (isDebug) {
+          console.log(`${debugLabel} - Step 4 (Conference Record): ${aAbbr} ${aGameRec.confWins}-${aGameRec.confLosses}-${aGameRec.confTies} (${(aConfPct * 100).toFixed(1)}%) vs ${bAbbr} ${bGameRec.confWins}-${bGameRec.confLosses}-${bGameRec.confTies} (${(bConfPct * 100).toFixed(1)}%)`);
+        }
+        if (bConfPct !== aConfPct) {
+          if (isDebug) console.log(`${debugLabel} - ${bConfPct > aConfPct ? bAbbr : aAbbr} wins on conference record`);
+          return bConfPct - aConfPct;
+        }
+        if (isDebug) console.log(`${debugLabel} - Conference record is tied, using overall record`);
       }
     }
     
     // Fallback to overall record
+    if (isDebug) {
+      console.log(`${debugLabel} - Final: Using overall record - ${aAbbr} ${aRec.wins}-${aRec.losses} (${(aRec.winPct * 100).toFixed(1)}%) vs ${bAbbr} ${bRec.wins}-${bRec.losses} (${(bRec.winPct * 100).toFixed(1)}%)`);
+    }
     if (bRec.winPct !== aRec.winPct) return bRec.winPct - aRec.winPct;
     if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
     return aRec.losses - bRec.losses; // Fewer losses is better
@@ -495,7 +535,7 @@ export default function StandingsPage() {
         if (bestRecordTeams.length === 1) {
           sorted = bestRecordTeams;
         } else if (bestRecordTeams.length === 2) {
-          sorted = [...bestRecordTeams].sort((a, b) => breakTie(a, b, h2hMap, gameRecords, true));
+          sorted = [...bestRecordTeams].sort((a, b) => breakTie(a, b, h2hMap, gameRecords, true, div));
         } else {
           sorted = breakMultiTeamTie(bestRecordTeams, h2hMap, gameRecords, true);
         }
@@ -506,17 +546,10 @@ export default function StandingsPage() {
             leaders.add(leaderAbbr);
             // Debug: Log division leader calculation
             if (div === "NFC South") {
-              console.log(`NFC South leader: ${sorted[0].name} (${sorted[0].abbreviation}) - Record: ${sorted[0].record}`);
+              console.log(`\n=== ${div} Tiebreaker Calculation ===`);
+              console.log(`Teams with best record:`, bestRecordTeams.map(t => `${t.abbreviation} (${t.record})`));
               if (bestRecordTeams.length > 1) {
-                const otherTeam = bestRecordTeams.find(t => t.abbreviation?.toUpperCase() !== leaderAbbr);
-                if (otherTeam) {
-                  const h2h = getHeadToHeadRecord(leaderAbbr, otherTeam.abbreviation?.toUpperCase(), h2hMap);
-                  const commonOpps = getCommonOpponents(leaderAbbr, otherTeam.abbreviation?.toUpperCase(), gameRecords);
-                  const leaderCommon = getCommonGamesRecord(leaderAbbr, commonOpps, gameRecords);
-                  const otherCommon = getCommonGamesRecord(otherTeam.abbreviation?.toUpperCase(), commonOpps, gameRecords);
-                  console.log("Head-to-head:", h2h);
-                  console.log("Common games - Leader:", leaderCommon, "Other:", otherCommon);
-                }
+                console.log(`\nBreaking tie between ${bestRecordTeams.length} teams...`);
               }
             }
           }

@@ -552,6 +552,26 @@ export default function StandingsPage() {
     return aRec.losses - bRec.losses; // Fewer losses is better
   };
 
+  // Calculate head-to-head win percentage for a team against other teams in a tie
+  const getHeadToHeadWinPct = (teamAbbr, otherTeamAbbrs, h2hMap) => {
+    let totalWins = 0;
+    let totalGames = 0;
+    
+    for (const otherAbbr of otherTeamAbbrs) {
+      const h2h = getHeadToHeadRecord(teamAbbr, otherAbbr, h2hMap);
+      if (h2h && h2h.total > 0) {
+        const record = h2hMap.get([teamAbbr, otherAbbr].sort().join('_'));
+        if (record) {
+          const teamWins = record[teamAbbr] || 0;
+          totalWins += teamWins;
+          totalGames += h2h.total;
+        }
+      }
+    }
+    
+    return totalGames > 0 ? totalWins / totalGames : 0;
+  };
+
   // Break tie between multiple teams (3+)
   const breakMultiTeamTie = (tiedTeams, h2hMap, gameRecords, isDivision = false) => {
     if (tiedTeams.length <= 1) return tiedTeams;
@@ -595,7 +615,27 @@ export default function StandingsPage() {
       }
     }
     
-    // No clear sweep, sort by record (wins, win pct, losses)
+    // No clear sweep, use head-to-head win percentage (Step 1 for 3+ teams)
+    // Calculate head-to-head win percentage for each team against the others
+    const teamsWithH2HPct = tiedTeams.map(team => {
+      const teamAbbr = team.abbreviation?.toUpperCase();
+      const otherAbbrs = teamAbbrs.filter(abbr => abbr !== teamAbbr);
+      const h2hWinPct = getHeadToHeadWinPct(teamAbbr, otherAbbrs, h2hMap);
+      return { team, h2hWinPct };
+    });
+    
+    // Sort by head-to-head win percentage (highest first)
+    teamsWithH2HPct.sort((a, b) => b.h2hWinPct - a.h2hWinPct);
+    
+    // If there's a clear winner by head-to-head, return sorted list
+    if (teamsWithH2HPct[0].h2hWinPct > teamsWithH2HPct[1].h2hWinPct) {
+      const winner = teamsWithH2HPct[0].team;
+      const remaining = teamsWithH2HPct.slice(1).map(t => t.team);
+      return [winner, ...breakMultiTeamTie(remaining, h2hMap, gameRecords, isDivision)];
+    }
+    
+    // If head-to-head is tied, continue with other tiebreakers
+    // For now, fall back to overall record
     return [...tiedTeams].sort((a, b) => {
       const aRec = parseRecord(a.record);
       const bRec = parseRecord(b.record);
@@ -651,7 +691,23 @@ export default function StandingsPage() {
         } else if (bestRecordTeams.length === 2) {
           sorted = [...bestRecordTeams].sort((a, b) => breakTie(a, b, h2hMap, gameRecords, true, div));
         } else {
+          // For 3+ teams, use multi-team tiebreaker
           sorted = breakMultiTeamTie(bestRecordTeams, h2hMap, gameRecords, true);
+          
+          // Debug: Log three-way tie calculation
+          if (div === "NFC South" && bestRecordTeams.length >= 3) {
+            console.log(`\n=== ${div} Three-Way Tie Calculation ===`);
+            console.log(`Teams with best record:`, bestRecordTeams.map(t => `${t.abbreviation} (${t.record})`));
+            bestRecordTeams.forEach(team => {
+              const teamAbbr = team.abbreviation?.toUpperCase();
+              const otherAbbrs = bestRecordTeams
+                .filter(t => t.abbreviation?.toUpperCase() !== teamAbbr)
+                .map(t => t.abbreviation?.toUpperCase());
+              const h2hWinPct = getHeadToHeadWinPct(teamAbbr, otherAbbrs, h2hMap);
+              console.log(`${teamAbbr} head-to-head win % vs others: ${(h2hWinPct * 100).toFixed(1)}%`);
+            });
+            console.log(`Winner: ${sorted[0].abbreviation}`);
+          }
         }
         
         if (sorted.length > 0) {
@@ -665,6 +721,7 @@ export default function StandingsPage() {
               if (bestRecordTeams.length > 1) {
                 console.log(`\nBreaking tie between ${bestRecordTeams.length} teams...`);
               }
+              console.log(`Division Leader: ${leaderAbbr}`);
             }
           }
         }

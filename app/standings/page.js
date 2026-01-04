@@ -69,16 +69,130 @@ export default function StandingsPage() {
     return leaders;
   };
 
-  const getStatus = (abbr, seed, allDivLeaders) => {
-    const a = abbr?.toUpperCase().trim(); 
-    const eliminated = ["WSH", "LAS", "DAL", "DET", "MIN", "ATL", "NO", "ARI", "NYG", "IND", "MIA", "CIN", "KC", "CLE", "TEN", "NYJ"];
-    const clinched = ["DEN", "NE", "CHI", "PHI", "JAX", "BUF", "HOU", "LAC", "SF", "SEA", "GB", "LAR"];
-    const bubbleTeams = ["TB", "BAL"];
+  // Check if a team is mathematically eliminated from playoffs
+  const isEliminated = (team, conferenceStandings, allDivLeaders) => {
+    const teamAbbr = team.abbreviation?.toUpperCase();
+    if (!teamAbbr || !conferenceStandings || conferenceStandings.length === 0) return false;
+    
+    // If team is a division leader, they can't be eliminated (division leaders get seeds 1-4)
+    if (allDivLeaders && allDivLeaders.has(teamAbbr)) return false;
+    
+    const teamRec = parseRecord(team.record);
+    const maxPossibleWins = teamRec.wins + 1; // Assuming 1 game remaining (Week 18)
+    const maxPossibleWinPct = maxPossibleWins / (teamRec.total + 1);
+    
+    // Count how many teams are guaranteed to finish ahead (division leaders + wild cards)
+    let teamsGuaranteedAhead = 0;
+    
+    // Count division leaders (they get seeds 1-4)
+    const divisionLeadersInConf = conferenceStandings.filter(t => {
+      const abbr = t.abbreviation?.toUpperCase();
+      return abbr && abbr !== teamAbbr && allDivLeaders && allDivLeaders.has(abbr);
+    });
+    teamsGuaranteedAhead += divisionLeadersInConf.length;
+    
+    // Count wild card teams that are guaranteed to finish ahead
+    for (const otherTeam of conferenceStandings) {
+      const otherAbbr = otherTeam.abbreviation?.toUpperCase();
+      if (!otherAbbr || otherAbbr === teamAbbr) continue;
+      
+      // Skip division leaders (already counted)
+      if (allDivLeaders && allDivLeaders.has(otherAbbr)) continue;
+      
+      const otherRec = parseRecord(otherTeam.record);
+      const otherMaxWins = otherRec.wins + 1;
+      const otherMaxWinPct = otherMaxWins / (otherRec.total + 1);
+      
+      // If other team can finish with more wins, or same wins but better win percentage
+      if (otherMaxWins > maxPossibleWins || 
+          (otherMaxWins === maxPossibleWins && otherMaxWinPct >= maxPossibleWinPct)) {
+        teamsGuaranteedAhead++;
+      }
+    }
+    
+    // If 7 or more teams are guaranteed to finish ahead, team is eliminated
+    return teamsGuaranteedAhead >= 7;
+  };
 
-    if (eliminated.includes(a)) return { label: "ELIMINATED", color: "#d32f2f", border: "1px solid #d32f2f" };
-    if (clinched.includes(a)) return { label: "CLINCHED (x)", color: "#000" };
-    if (bubbleTeams.includes(a) || (seed >= 8 && seed <= 9)) return { label: "ON THE BUBBLE", color: "#856404", bg: "#fff3cd", border: "1px solid #ffeeba" };
-    if (allDivLeaders && allDivLeaders.has(a)) return { label: "DIV LEADER", color: "#000" };
+  // Check if a wild card team has clinched a playoff spot
+  const hasClenched = (team, seed, conferenceStandings, allDivLeaders) => {
+    if (!seed || !conferenceStandings || seed > 7) return false;
+    
+    const teamAbbr = team.abbreviation?.toUpperCase();
+    
+    // Division leaders are handled separately, they always have "DIV LEADER" status
+    if (allDivLeaders && allDivLeaders.has(teamAbbr)) return false;
+    
+    const teamRec = parseRecord(team.record);
+    const teamMinWins = teamRec.wins; // Worst case: lose remaining game
+    const teamMinWinPct = teamMinWins / (teamRec.total + 1);
+    
+    // Count how many teams are guaranteed to finish behind this team
+    // A team has clinched if at least 7 teams are guaranteed to finish behind them
+    let teamsGuaranteedBehind = 0;
+    
+    // Count division leaders (they get seeds 1-4, so they're ahead)
+    const divisionLeadersInConf = conferenceStandings.filter(t => {
+      const abbr = t.abbreviation?.toUpperCase();
+      return abbr && abbr !== teamAbbr && allDivLeaders && allDivLeaders.has(abbr);
+    });
+    // Division leaders are ahead, not behind
+    
+    // Count wild card teams that are guaranteed to finish behind
+    for (const otherTeam of conferenceStandings) {
+      const otherAbbr = otherTeam.abbreviation?.toUpperCase();
+      if (!otherAbbr || otherAbbr === teamAbbr) continue;
+      
+      // Skip division leaders (they're ahead)
+      if (allDivLeaders && allDivLeaders.has(otherAbbr)) continue;
+      
+      const otherRec = parseRecord(otherTeam.record);
+      const otherMaxWins = otherRec.wins + 1; // Best case: win remaining game
+      const otherMaxWinPct = otherMaxWins / (otherRec.total + 1);
+      
+      // If other team's best case is worse than this team's worst case, they're guaranteed behind
+      if (otherMaxWins < teamMinWins || 
+          (otherMaxWins === teamMinWins && otherMaxWinPct < teamMinWinPct)) {
+        teamsGuaranteedBehind++;
+      }
+    }
+    
+    // If 7 or more teams are guaranteed to finish behind, this team has clinched
+    // (There are 16 teams per conference, so if 7+ are behind, this team is in top 7)
+    return teamsGuaranteedBehind >= 7;
+  };
+
+  const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings) => {
+    const a = abbr?.toUpperCase().trim(); 
+    
+    // Priority 1: Check if division leader (division leaders always get this status)
+    if (allDivLeaders && allDivLeaders.has(a)) {
+      return { label: "DIV LEADER", color: "#000" };
+    }
+    
+    // Priority 2: Check if wild card team has clinched playoff spot
+    const clinched = hasClenched(team, seed, conferenceStandings || [], allDivLeaders);
+    if (clinched) {
+      return { label: "CLINCHED (x)", color: "#000" };
+    }
+    
+    // Priority 3: Check if mathematically eliminated
+    const eliminated = isEliminated(team, conferenceStandings || [], allDivLeaders);
+    if (eliminated) return { label: "ELIMINATED", color: "#d32f2f", border: "1px solid #d32f2f" };
+    
+    // Priority 4: Check if currently in playoffs (seeds 1-7)
+    if (seed && seed <= 7) {
+      // Teams in playoff position but not clinched
+      return { label: "IN THE HUNT", color: "#666" };
+    }
+    
+    // Priority 5: Teams that could make playoffs but aren't currently in (seeds 8+)
+    if (seed && seed >= 8) {
+      // These teams are on the bubble - they could still make it
+      return { label: "ON THE BUBBLE", color: "#856404", bg: "#fff3cd", border: "1px solid #ffeeba" };
+    }
+    
+    // Default fallback
     return { label: "IN THE HUNT", color: "#666" };
   };
 
@@ -610,10 +724,10 @@ export default function StandingsPage() {
         {/* SECTION 1: PLAYOFF STANDINGS */}
         <div style={{ display: "flex", gap: "30px", flexWrap: "wrap", justifyContent: "center", marginBottom: "80px" }}>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} allDivLeaders={allDivLeaders} />
+            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(33)} />
           </div>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} allDivLeaders={allDivLeaders} />
+            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(34)} />
           </div>
         </div>
 
@@ -677,7 +791,7 @@ export default function StandingsPage() {
 }
 
 // UNIFIED TABLE COMPONENT
-function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDivLeaders }) {
+function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDivLeaders, conferenceStandings }) {
   return (
     <div style={{ backgroundColor: "#fff", border: "1px solid #dee2e6", borderRadius: "8px", overflow: "hidden", boxShadow: "0 4px 6px rgba(0,0,0,0.05)" }}>
       <div style={{ padding: "15px 20px", fontWeight: "900", borderBottom: "4px solid #000", fontSize: isDivisionView ? "1.1rem" : "1.5rem", backgroundColor: "#fff", color: "#000" }}>
@@ -696,7 +810,7 @@ function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDi
         <tbody>
           {teams.map((team, i) => {
             const rank = i + 1;
-            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders);
+            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders, team, conferenceStandings);
             
             // LOGIC FOR CUSTOM RAIDERS LOGO
             const isRaiders = ["LAS"].includes(team.abbreviation?.toUpperCase());

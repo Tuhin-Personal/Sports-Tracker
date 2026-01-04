@@ -75,9 +75,15 @@ export default function StandingsPage() {
     const division = getTeamDivision(teamAbbr);
     if (!division || !conferenceStandings) return false;
     
+    const isDebug = debugLabel.includes('AFC North') || debugLabel.includes('BAL') || debugLabel.includes('PIT');
+    
     const divisionAbbrs = divisionMap[division] || [];
     const teamRec = parseRecord(team.record);
     const teamMaxWins = teamRec.wins + 1; // Best case: win remaining game
+    
+    // Get team's game records for divisional record calculation
+    const teamGameRec = gameRecords.get(teamAbbr);
+    if (!teamGameRec) return false;
     
     // Get all teams in the division from conference standings
     const divisionTeams = conferenceStandings.filter(t => 
@@ -85,6 +91,12 @@ export default function StandingsPage() {
     );
     
     if (divisionTeams.length === 0) return false;
+    
+    if (isDebug) {
+      console.log(`\n${debugLabel} - Checking if ${teamAbbr} could win ${division}`);
+      console.log(`  ${teamAbbr} current: ${teamRec.wins}-${teamRec.losses}, max if win: ${teamMaxWins} wins`);
+      console.log(`  ${teamAbbr} divisional record: ${teamGameRec.divisionWins}-${teamGameRec.divisionLosses}-${teamGameRec.divisionTies}`);
+    }
     
     // Find current division leader (team with best record)
     const sortedDivTeams = [...divisionTeams].sort((a, b) => {
@@ -97,27 +109,113 @@ export default function StandingsPage() {
     const currentLeader = sortedDivTeams[0];
     const leaderAbbr = currentLeader.abbreviation?.toUpperCase();
     
-    if (leaderAbbr === teamAbbr) return true; // Already division leader
+    if (leaderAbbr === teamAbbr) {
+      if (isDebug) console.log(`  ${teamAbbr} is already division leader`);
+      return true; // Already division leader
+    }
     
     const leaderRec = parseRecord(currentLeader.record);
     const leaderMinWins = leaderRec.wins; // Worst case: lose remaining game
+    const leaderGameRec = gameRecords.get(leaderAbbr);
+    
+    if (isDebug) {
+      console.log(`  Current leader: ${leaderAbbr} (${leaderRec.wins}-${leaderRec.losses})`);
+      console.log(`  ${leaderAbbr} min if lose: ${leaderMinWins} wins`);
+      if (leaderGameRec) {
+        console.log(`  ${leaderAbbr} divisional record: ${leaderGameRec.divisionWins}-${leaderGameRec.divisionLosses}-${leaderGameRec.divisionTies}`);
+      }
+    }
     
     // If team can finish with same or more wins than leader's worst case, they could win division
     if (teamMaxWins >= leaderMinWins) {
-      // If they tie, check head-to-head
+      // If they tie on overall record, check divisional record (Step 2 of NFL tiebreaking)
       if (teamMaxWins === leaderMinWins) {
+        if (isDebug) console.log(`  Records would tie at ${teamMaxWins} wins, checking divisional record...`);
+        
+        // Calculate what divisional records would be if team wins and leader loses
+        // Team's divisional record if they win (need to check if remaining game is divisional)
+        // For now, assume team could improve divisional record
+        const teamDivWinsIfWin = teamGameRec.divisionWins + 1; // If remaining game is divisional
+        const leaderDivWinsIfLose = leaderGameRec ? leaderGameRec.divisionWins : 0;
+        
+        // Check if team's best divisional record could beat leader's worst
+        // Team needs to have a better divisional record after winning
+        if (teamDivWinsIfWin > leaderDivWinsIfLose) {
+          if (isDebug) console.log(`  ${teamAbbr} could win on divisional record (${teamDivWinsIfWin} > ${leaderDivWinsIfLose})`);
+          return true;
+        }
+        
+        // Check head-to-head as fallback (Step 1)
         const h2h = getHeadToHeadRecord(teamAbbr, leaderAbbr, h2hMap);
         if (h2h && h2h.total > 0) {
           const record = h2hMap.get([teamAbbr, leaderAbbr].sort().join('_'));
           if (record) {
             const teamWins = record[teamAbbr] || 0;
             const leaderWins = record[leaderAbbr] || 0;
-            if (teamWins > leaderWins) return true; // Team wins head-to-head
+            if (isDebug) {
+              console.log(`  Head-to-head: ${teamAbbr} ${teamWins}-${leaderWins} ${leaderAbbr}`);
+            }
+            if (teamWins > leaderWins) {
+              if (isDebug) console.log(`  ${teamAbbr} could win on head-to-head`);
+              return true; // Team wins head-to-head
+            }
+          }
+        }
+        
+        // Check if team could win on divisional record
+        // If team wins their remaining game and it's a divisional game, check divisional record
+        // For Baltimore: if they beat Pittsburgh, they'd have 4-2 divisional record vs Steelers' 3-3
+        const teamCurrentDivWins = teamGameRec.divisionWins;
+        const teamCurrentDivLosses = teamGameRec.divisionLosses;
+        const leaderCurrentDivWins = leaderGameRec ? leaderGameRec.divisionWins : 0;
+        const leaderCurrentDivLosses = leaderGameRec ? leaderGameRec.divisionLosses : 0;
+        
+        // Check if the remaining game between team and leader is divisional (they're in same division)
+        const isDivisionalGame = areInSameDivision(teamAbbr, leaderAbbr);
+        
+        if (isDivisionalGame) {
+          // If team wins and leader loses (they play each other), calculate new divisional records
+          const teamDivWinsIfWin = teamCurrentDivWins + 1; // Beat leader
+          const teamDivLossesIfWin = teamCurrentDivLosses;
+          const leaderDivWinsIfLose = leaderCurrentDivWins; // Lose to team
+          const leaderDivLossesIfLose = leaderCurrentDivLosses + 1;
+          
+          // Calculate divisional win percentages
+          const teamDivTotal = teamDivWinsIfWin + teamDivLossesIfWin;
+          const leaderDivTotal = leaderDivWinsIfLose + leaderDivLossesIfLose;
+          const teamDivPct = teamDivTotal > 0 ? teamDivWinsIfWin / teamDivTotal : 0;
+          const leaderDivPct = leaderDivTotal > 0 ? leaderDivWinsIfLose / leaderDivTotal : 0;
+          
+          if (isDebug) {
+            console.log(`  Remaining game is divisional (${teamAbbr} vs ${leaderAbbr})`);
+            console.log(`  If ${teamAbbr} wins: divisional record ${teamDivWinsIfWin}-${teamDivLossesIfWin} (${(teamDivPct * 100).toFixed(1)}%)`);
+            console.log(`  If ${leaderAbbr} loses: divisional record ${leaderDivWinsIfLose}-${leaderDivLossesIfLose} (${(leaderDivPct * 100).toFixed(1)}%)`);
+          }
+          
+          // If team's divisional record would be better, they could win the division
+          if (teamDivPct > leaderDivPct || (teamDivPct === leaderDivPct && teamDivWinsIfWin > leaderDivWinsIfLose)) {
+            if (isDebug) console.log(`  ${teamAbbr} could win on divisional record`);
+            return true;
+          }
+        } else {
+          // If remaining game is not divisional, check current divisional records
+          // Team would need to have a better divisional record after winning
+          const teamDivTotal = teamCurrentDivWins + teamCurrentDivLosses;
+          const leaderDivTotal = leaderCurrentDivWins + leaderCurrentDivLosses;
+          const teamDivPct = teamDivTotal > 0 ? teamCurrentDivWins / teamDivTotal : 0;
+          const leaderDivPct = leaderDivTotal > 0 ? leaderCurrentDivWins / leaderDivTotal : 0;
+          
+          if (teamDivPct > leaderDivPct || (teamDivPct === leaderDivPct && teamCurrentDivWins > leaderCurrentDivWins)) {
+            if (isDebug) console.log(`  ${teamAbbr} could win on divisional record (current: ${teamCurrentDivWins}-${teamCurrentDivLosses} vs ${leaderCurrentDivWins}-${leaderCurrentDivLosses})`);
+            return true;
           }
         }
       } else {
+        if (isDebug) console.log(`  ${teamAbbr} could finish with more wins (${teamMaxWins} > ${leaderMinWins})`);
         return true; // Team can finish with more wins
       }
+    } else {
+      if (isDebug) console.log(`  ${teamAbbr} cannot catch ${leaderAbbr} (max ${teamMaxWins} < min ${leaderMinWins})`);
     }
     
     return false;

@@ -162,11 +162,71 @@ export default function StandingsPage() {
     return teamsGuaranteedBehind >= 7;
   };
 
-  const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings) => {
+  // Check if a division leader has clinched their division (can't lose it even if they lose)
+  const hasClenchedDivision = (team, seed, conferenceStandings, allDivLeaders, h2hMap, gameRecords) => {
+    const teamAbbr = team.abbreviation?.toUpperCase();
+    if (!allDivLeaders || !allDivLeaders.has(teamAbbr)) return false;
+    if (!seed || seed > 4) return false; // Only division leaders in seeds 1-4
+    
+    // Get the team's division
+    const division = getTeamDivision(teamAbbr);
+    if (!division) return false;
+    
+    // Get all teams in the division
+    const divisionAbbrs = divisionMap[division] || [];
+    const divisionTeams = conferenceStandings.filter(t => 
+      divisionAbbrs.includes(t.abbreviation?.toUpperCase())
+    );
+    
+    // Check if any other team in the division could catch them
+    const teamRec = parseRecord(team.record);
+    const teamMinWins = teamRec.wins; // Worst case: lose remaining game
+    
+    for (const otherTeam of divisionTeams) {
+      const otherAbbr = otherTeam.abbreviation?.toUpperCase();
+      if (!otherAbbr || otherAbbr === teamAbbr) continue;
+      
+      const otherRec = parseRecord(otherTeam.record);
+      const otherMaxWins = otherRec.wins + 1; // Best case: win remaining game
+      
+      // If other team can finish with same or more wins, check tiebreakers
+      if (otherMaxWins >= teamMinWins) {
+        // If they tie, check if other team could win the tiebreaker
+        if (otherMaxWins === teamMinWins) {
+          // Check head-to-head - if other team won, they could take the division
+          const h2h = getHeadToHeadRecord(teamAbbr, otherAbbr, h2hMap);
+          if (h2h && h2h.total > 0) {
+            const record = h2hMap.get([teamAbbr, otherAbbr].sort().join('_'));
+            if (record) {
+              const otherWins = record[otherAbbr] || 0;
+              const teamWins = record[teamAbbr] || 0;
+              if (otherWins > teamWins) {
+                return false; // Other team could win on head-to-head
+              }
+            }
+          }
+        } else {
+          return false; // Other team could finish with more wins
+        }
+      }
+    }
+    
+    return true; // No team can catch them
+  };
+
+  const getStatus = (abbr, seed, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords) => {
     const a = abbr?.toUpperCase().trim(); 
     
-    // Priority 1: Check if division leader (division leaders always get this status)
+    // Priority 1: Check if division leader has clinched division
     if (allDivLeaders && allDivLeaders.has(a)) {
+      const clinchedDiv = hasClenchedDivision(team, seed, conferenceStandings || [], allDivLeaders, h2hMap, gameRecords);
+      if (clinchedDiv) {
+        return { label: "DIV LEADER", color: "#000" };
+      }
+      // Division leader but not clinched - they're in the hunt
+      if (seed && seed <= 7) {
+        return { label: "IN THE HUNT", color: "#666" };
+      }
       return { label: "DIV LEADER", color: "#000" };
     }
     
@@ -781,10 +841,10 @@ export default function StandingsPage() {
         {/* SECTION 1: PLAYOFF STANDINGS */}
         <div style={{ display: "flex", gap: "30px", flexWrap: "wrap", justifyContent: "center", marginBottom: "80px" }}>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(33)} />
+            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(33)} buildHeadToHeadMap={buildHeadToHeadMap} buildGameRecords={buildGameRecords} />
           </div>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(34)} />
+            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} allDivLeaders={allDivLeaders} conferenceStandings={processConference(34)} buildHeadToHeadMap={buildHeadToHeadMap} buildGameRecords={buildGameRecords} />
           </div>
         </div>
 
@@ -848,7 +908,7 @@ export default function StandingsPage() {
 }
 
 // UNIFIED TABLE COMPONENT
-function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDivLeaders, conferenceStandings }) {
+function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDivLeaders, conferenceStandings, buildHeadToHeadMap, buildGameRecords }) {
   return (
     <div style={{ backgroundColor: "#fff", border: "1px solid #dee2e6", borderRadius: "8px", overflow: "hidden", boxShadow: "0 4px 6px rgba(0,0,0,0.05)" }}>
       <div style={{ padding: "15px 20px", fontWeight: "900", borderBottom: "4px solid #000", fontSize: isDivisionView ? "1.1rem" : "1.5rem", backgroundColor: "#fff", color: "#000" }}>
@@ -867,7 +927,9 @@ function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDi
         <tbody>
           {teams.map((team, i) => {
             const rank = i + 1;
-            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders, team, conferenceStandings);
+            const h2hMap = buildHeadToHeadMap ? buildHeadToHeadMap() : new Map();
+            const gameRecords = buildGameRecords ? buildGameRecords() : new Map();
+            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders, team, conferenceStandings, h2hMap, gameRecords);
             
             // LOGIC FOR CUSTOM RAIDERS LOGO
             const isRaiders = ["LAS"].includes(team.abbreviation?.toUpperCase());

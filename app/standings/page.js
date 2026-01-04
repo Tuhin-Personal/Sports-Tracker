@@ -35,35 +35,103 @@ export default function StandingsPage() {
       } catch (err) { console.error(err); } finally { setLoading(false); }
     }
     fetchData();
+    // Refresh data every 30 seconds to keep standings updated
+    const interval = setInterval(fetchData, 30000);
+    return () => clearInterval(interval);
   }, []);
 
-  const getStatus = (abbr, seed) => {
+  // Get all division leaders dynamically
+  const getAllDivisionLeaders = () => {
+    const leaders = new Set();
+    const afcLeaders = getDivisionLeaders(33);
+    const nfcLeaders = getDivisionLeaders(34);
+    afcLeaders.forEach(l => leaders.add(l));
+    nfcLeaders.forEach(l => leaders.add(l));
+    return leaders;
+  };
+
+  const getStatus = (abbr, seed, allDivLeaders) => {
     const a = abbr?.toUpperCase().trim(); 
     const eliminated = ["WSH", "LAS", "DAL", "DET", "MIN", "ATL", "NO", "ARI", "NYG", "IND", "MIA", "CIN", "KC", "CLE", "TEN", "NYJ"];
     const clinched = ["DEN", "NE", "CHI", "PHI", "JAX", "BUF", "HOU", "LAC", "SF", "SEA", "GB", "LAR"];
     const bubbleTeams = ["TB", "BAL"];
-    const divLeaders = ["PIT", "CAR"];
 
     if (eliminated.includes(a)) return { label: "ELIMINATED", color: "#d32f2f", border: "1px solid #d32f2f" };
     if (clinched.includes(a)) return { label: "CLINCHED (x)", color: "#000" };
     if (bubbleTeams.includes(a) || (seed >= 8 && seed <= 9)) return { label: "ON THE BUBBLE", color: "#856404", bg: "#fff3cd", border: "1px solid #ffeeba" };
-    if (divLeaders.includes(a)) return { label: "DIV LEADER", color: "#000" };
+    if (allDivLeaders && allDivLeaders.has(a)) return { label: "DIV LEADER", color: "#000" };
     return { label: "IN THE HUNT", color: "#666" };
   };
 
-  const processConference = (confId) => {
-    return teams
-      .filter(t => t.conference?.conference_id === confId)
-      .sort((a, b) => {
-        const leaders = ["DEN", "NE", "JAX", "PIT", "SEA", "CHI", "PHI", "CAR"];
-        const aL = leaders.includes(a.abbreviation) ? 0 : 1;
-        const bL = leaders.includes(b.abbreviation) ? 0 : 1;
-        if (aL !== bL) return aL - bL;
-        return (parseInt(b.record) || 0) - (parseInt(a.record) || 0);
+  // Parse win-loss record string (e.g., "10-7" or "9-8") to get wins and win percentage
+  const parseRecord = (recordStr) => {
+    if (!recordStr || typeof recordStr !== 'string') return { wins: 0, losses: 0, winPct: 0 };
+    const parts = recordStr.split('-');
+    const wins = parseInt(parts[0]) || 0;
+    const losses = parseInt(parts[1]) || 0;
+    const total = wins + losses;
+    const winPct = total > 0 ? wins / total : 0;
+    return { wins, losses, winPct, total };
+  };
+
+  // Get division leader for each division
+  const getDivisionLeaders = (confId) => {
+    const conferenceTeams = teams.filter(t => t.conference?.conference_id === confId);
+    const leaders = new Set();
+    
+    Object.entries(divisionMap).forEach(([div, abbrs]) => {
+      const divTeams = conferenceTeams.filter(t => 
+        abbrs.includes(t.abbreviation?.toUpperCase())
+      );
+      if (divTeams.length === 0) return;
+      
+      // Sort by wins, then win percentage
+      const sorted = divTeams.sort((a, b) => {
+        const aRec = parseRecord(a.record);
+        const bRec = parseRecord(b.record);
+        if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
+        return bRec.winPct - aRec.winPct;
       });
+      
+      if (sorted.length > 0) {
+        leaders.add(sorted[0].abbreviation?.toUpperCase());
+      }
+    });
+    
+    return leaders;
+  };
+
+  const processConference = (confId) => {
+    const conferenceTeams = teams.filter(t => t.conference?.conference_id === confId);
+    const divisionLeaders = getDivisionLeaders(confId);
+    
+    // Separate division leaders and wild card teams
+    const leaders = conferenceTeams.filter(t => 
+      divisionLeaders.has(t.abbreviation?.toUpperCase())
+    );
+    const wildCards = conferenceTeams.filter(t => 
+      !divisionLeaders.has(t.abbreviation?.toUpperCase())
+    );
+    
+    // Sort function: by wins, then win percentage
+    const sortByRecord = (a, b) => {
+      const aRec = parseRecord(a.record);
+      const bRec = parseRecord(b.record);
+      if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
+      return bRec.winPct - aRec.winPct;
+    };
+    
+    // Sort division leaders and wild cards separately
+    const sortedLeaders = leaders.sort(sortByRecord);
+    const sortedWildCards = wildCards.sort(sortByRecord);
+    
+    // Combine: division leaders first (seeds 1-4), then wild cards (seeds 5-7)
+    return [...sortedLeaders, ...sortedWildCards];
   };
 
   if (loading) return <div style={{ textAlign: "center", padding: "100px" }}>Loading 2025 Standings...</div>;
+
+  const allDivLeaders = getAllDivisionLeaders();
 
   return (
     <div style={{ backgroundColor: "#f8f9fa", minHeight: "100vh", color: "#000", fontFamily: "Arial, sans-serif" }}>
@@ -76,10 +144,10 @@ export default function StandingsPage() {
         {/* SECTION 1: PLAYOFF STANDINGS */}
         <div style={{ display: "flex", gap: "30px", flexWrap: "wrap", justifyContent: "center", marginBottom: "80px" }}>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} />
+            <StandingsTable title="AFC Playoff Race" teams={processConference(33)} getStatus={getStatus} allDivLeaders={allDivLeaders} />
           </div>
           <div style={{ flex: "1", minWidth: "500px" }}>
-            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} />
+            <StandingsTable title="NFC Playoff Race" teams={processConference(34)} getStatus={getStatus} allDivLeaders={allDivLeaders} />
           </div>
         </div>
 
@@ -93,21 +161,39 @@ export default function StandingsPage() {
           {/* AFC COLUMN */}
           <div style={{ flex: "1", minWidth: "450px" }}>
             <h3 style={{ textAlign: "center", color: "#D50A0A", fontSize: "1.75rem", fontWeight: "900", marginBottom: "20px", borderBottom: "6px solid #D50A0A", paddingBottom: "10px" }}>AFC</h3>
-            {["AFC East", "AFC North", "AFC South", "AFC West"].map(div => (
-              <div key={div} style={{ marginBottom: "40px" }}>
-                <StandingsTable title={div} teams={teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase())).sort((a,b) => (parseInt(b.record)||0) - (parseInt(a.record)||0))} getStatus={getStatus} isDivisionView={true} />
-              </div>
-            ))}
+            {["AFC East", "AFC North", "AFC South", "AFC West"].map(div => {
+              const divTeams = teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase()));
+              const sorted = divTeams.sort((a, b) => {
+                const aRec = parseRecord(a.record);
+                const bRec = parseRecord(b.record);
+                if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
+                return bRec.winPct - aRec.winPct;
+              });
+              return (
+                <div key={div} style={{ marginBottom: "40px" }}>
+                  <StandingsTable title={div} teams={sorted} getStatus={getStatus} isDivisionView={true} allDivLeaders={allDivLeaders} />
+                </div>
+              );
+            })}
           </div>
 
           {/* NFC COLUMN */}
           <div style={{ flex: "1", minWidth: "450px" }}>
             <h3 style={{ textAlign: "center", color: "#013369", fontSize: "1.75rem", fontWeight: "900", marginBottom: "20px", borderBottom: "6px solid #013369", paddingBottom: "10px" }}>NFC</h3>
-            {["NFC East", "NFC North", "NFC South", "NFC West"].map(div => (
-              <div key={div} style={{ marginBottom: "40px" }}>
-                <StandingsTable title={div} teams={teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase())).sort((a,b) => (parseInt(b.record)||0) - (parseInt(a.record)||0))} getStatus={getStatus} isDivisionView={true} />
-              </div>
-            ))}
+            {["NFC East", "NFC North", "NFC South", "NFC West"].map(div => {
+              const divTeams = teams.filter(t => divisionMap[div].includes(t.abbreviation?.toUpperCase()));
+              const sorted = divTeams.sort((a, b) => {
+                const aRec = parseRecord(a.record);
+                const bRec = parseRecord(b.record);
+                if (bRec.wins !== aRec.wins) return bRec.wins - aRec.wins;
+                return bRec.winPct - aRec.winPct;
+              });
+              return (
+                <div key={div} style={{ marginBottom: "40px" }}>
+                  <StandingsTable title={div} teams={sorted} getStatus={getStatus} isDivisionView={true} allDivLeaders={allDivLeaders} />
+                </div>
+              );
+            })}
           </div>
 
         </div>
@@ -117,7 +203,7 @@ export default function StandingsPage() {
 }
 
 // UNIFIED TABLE COMPONENT
-function StandingsTable({ title, teams, getStatus, isDivisionView = false }) {
+function StandingsTable({ title, teams, getStatus, isDivisionView = false, allDivLeaders }) {
   return (
     <div style={{ backgroundColor: "#fff", border: "1px solid #dee2e6", borderRadius: "8px", overflow: "hidden", boxShadow: "0 4px 6px rgba(0,0,0,0.05)" }}>
       <div style={{ padding: "15px 20px", fontWeight: "900", borderBottom: "4px solid #000", fontSize: isDivisionView ? "1.1rem" : "1.5rem", backgroundColor: "#fff", color: "#000" }}>
@@ -136,7 +222,7 @@ function StandingsTable({ title, teams, getStatus, isDivisionView = false }) {
         <tbody>
           {teams.map((team, i) => {
             const rank = i + 1;
-            const status = getStatus(team.abbreviation, isDivisionView ? null : rank);
+            const status = getStatus(team.abbreviation, isDivisionView ? null : rank, allDivLeaders);
             
             // LOGIC FOR CUSTOM RAIDERS LOGO
             const isRaiders = ["LAS"].includes(team.abbreviation?.toUpperCase());
